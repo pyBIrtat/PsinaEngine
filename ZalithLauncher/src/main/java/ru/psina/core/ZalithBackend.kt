@@ -1,0 +1,105 @@
+package ru.psina.core
+
+import android.content.Context
+import com.movtery.zalithlauncher.game.account.Account
+import com.movtery.zalithlauncher.game.account.AccountType
+import com.movtery.zalithlauncher.game.version.installed.Version
+import com.movtery.zalithlauncher.game.version.installed.VersionFolders
+import com.movtery.zalithlauncher.game.version.installed.VersionsManager
+import com.movtery.zalithlauncher.ui.activities.runGame
+import java.io.File
+
+/**
+ * Родной запуск внутри Psina Engine (этап E3 форка).
+ *
+ * Psina-ядро готовит инстанс (Paths.modsDir(mc)), а играем мы им не через
+ * внешние интенты, а напрямую движком этого APK: подбираем установленную
+ * версию (само имя mc или "psina-<mc>"), синхронизируем моды инстанса в
+ * mods-папку версии и вызываем runGame() — он стартует GameService и
+ * открывает VMActivity с LaunchConfig(version, account), ровно как это
+ * делает собственный UI ZalithLauncher2.
+ *
+ * Отличия от внешних движков (Engine.requestLaunch):
+ *  - нет best-effort extras: это наш процесс, контракт настоящий;
+ *  - ник становится локальным офлайн-профиле (accessToken "0");
+ *  - RAM управляется настройками версии форка (VersionConfig.ramAllocation),
+ *    поле ramGb из psina-профиля пока только логируется (TODO E4).
+ */
+object ZalithBackend {
+
+    /** Префикс имени версии, в которую Psina ставит клиент для mc. */
+    const val VERSION_PREFIX = "psina-"
+
+    sealed class NativeOutcome {
+        /** runGame() выполнен: сервис запущен, активити с игрой открыто. */
+        object RequestSent : NativeOutcome()
+
+        /** В форке нет установленной версии для mc — нужно поставить (E4). */
+        data class VersionMissing(val mc: String) : NativeOutcome()
+
+        data class Failed(val reason: String) : NativeOutcome()
+    }
+
+    /** Имена версий-кандидатов для mc: psina-<mc>, затем само <mc>. */
+    fun candidates(mc: String): List<String> = listOf("$VERSION_PREFIX$mc", mc)
+
+    fun findVersion(mc: String): Version? {
+        val names = candidates(mc).toSet()
+        return VersionsManager.versions.value.firstOrNull { it.getVersionName() in names }
+    }
+
+    /**
+     * Синхронизирует моды psina-инстанса в mods-папку версии.
+     * Источник — Paths.modsDir(mc) (туда всё поставил Installer), приёмник —
+     * VersionFolders.MOD.getDir(version.getGameDir()). Копируем только jar'ы,
+     * перезаписывая при несовпадении размера/времени.
+     */
+    fun syncMods(mc: String, version: Version): Int {
+        val src = Paths.modsDir(mc)
+        if (!src.isDirectory) return 0
+        val dst = VersionFolders.MOD.getDir(version.getGameDir())
+        dst.mkdirs()
+        var n = 0
+        src.walkTopDown()
+            .filter { it.isFile && it.name.endsWith(".jar", true) }
+            .forEach { f ->
+                val out = File(dst, f.name)
+                if (!out.exists() || out.length() != f.length() || out.lastModified() < f.lastModified()) {
+                    f.copyTo(out, overwrite = true)
+                }
+                n++
+            }
+        Logx.i("syncMods: $n jar'ов из ${src.path} -> ${dst.path}")
+        return n
+    }
+
+    /**
+     * Нативный запуск клиента из psina-инстанса средствами этого APK.
+     * Возвращает честный outcome: RequestSent — сервис и активити запущены
+     * (но «игра работает» мы по-прежнему не обещаем).
+     */
+    fun nativeLaunch(
+        ctx: Context,
+        mc: String,
+        nickname: String,
+        ramGb: Int,
+        extraJvmArgs: List<String> = emptyList(),
+        mainClass: String? = null
+    ): NativeOutcome {
+        return try {
+            val version = findVersion(mc) ?: return NativeOutcome.VersionMissing(mc)
+            syncMods(mc, version)
+            // Локальный офлайн-профиль — как LOCAL-аккаунты форка (accessToken "0").
+            val account = Account(username = nickname, accountType = AccountType.LOCAL.tag)
+            Logx.i(
+                "нативный запуск: версия ${version.getVersionName()}, игрок $nickname " +
+                    "(ram=$ramGb ГБ, jvmArgs=${extraJvmArgs.size}, mainClass=$mainClass)"
+            )
+            runGame(ctx, version, account)
+            NativeOutcome.RequestSent
+        } catch (e: Exception) {
+            Logx.e("нативный запуск не удался", e)
+            NativeOutcome.Failed(e.message ?: e.toString())
+        }
+    }
+}
