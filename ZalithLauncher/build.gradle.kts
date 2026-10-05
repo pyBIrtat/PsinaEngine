@@ -44,7 +44,10 @@ fun getKeyFromLocal(envKey: String, fileName: String? = null, default: String? =
 }
 
 android {
-    namespace = zalithPackageName
+    // Psina fork: namespace обязан остаться апстримовским — от него зависят R,
+    // BuildConfig, BuildKeys и относительные имена активити в манифесте.
+    // Идентичность форка — applicationId ниже (ru.psina.engine, ставится рядом с оригиналом).
+    namespace = "com.movtery.zalithlauncher"
     compileSdk {
         version = release(37) {
             minorApiLevel = 2
@@ -213,6 +216,9 @@ kotlin {
 }
 
 buildKeys {
+    // Psina fork: без этого класс генерится в android.namespace (у нас ru.psina.engine),
+    // а весь код апстрима импортирует com.movtery.zalithlauncher.BuildKeys.
+    packageName = "com.movtery.zalithlauncher"
     string("OAUTH_CLIENT_ID", getKeyFromLocal("OAUTH_CLIENT_ID", ".oauth_client_id.txt", defaultOAuthClientID), true)
     string("LAUNCHER_NAME", launcherAPPName, true)
     string("LAUNCHER_IDENTIFIER", launcherName, true)
