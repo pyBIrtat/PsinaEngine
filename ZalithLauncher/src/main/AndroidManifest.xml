@@ -144,7 +144,7 @@
             android:process=":filemanager"
             android:exported="false">
             <intent-filter>
-                <action android:name="com.movtery.zalithlauncher.filemanager.EVENT_SERVICE" />
+                <action android:name="ru.psina.engine.filemanager.EVENT_SERVICE" />
             </intent-filter>
         </service>
 

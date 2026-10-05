@@ -50,6 +50,6 @@ class FileManagerEventService : Service() {
     override fun onBind(intent: Intent?): IBinder? = messenger.binder
 
     companion object {
-        const val ACTION_BIND = "com.movtery.zalithlauncher.filemanager.EVENT_SERVICE"
+        const val ACTION_BIND = "ru.psina.engine.filemanager.EVENT_SERVICE"
     }
 }
