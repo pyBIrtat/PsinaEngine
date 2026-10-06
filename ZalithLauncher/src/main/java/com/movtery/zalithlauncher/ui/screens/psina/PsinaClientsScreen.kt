@@ -30,8 +30,10 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -40,10 +42,13 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.movtery.zalithlauncher.R
+import com.movtery.zalithlauncher.coroutine.TaskStage
 import com.movtery.zalithlauncher.ui.base.BaseScreen
 import com.movtery.zalithlauncher.ui.screens.NormalNavKey
 import com.movtery.zalithlauncher.viewmodel.ScreenBackStackViewModel
 import kotlin.concurrent.thread
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import ru.psina.core.Logx
 import ru.psina.core.ManifestRepo
 import ru.psina.core.PlayPipeline
@@ -51,6 +56,7 @@ import ru.psina.core.PlayState
 import ru.psina.core.Prefs
 import ru.psina.core.Store
 import ru.psina.core.Support
+import ru.psina.core.ZalithBackend
 
 /**
  * Экран «Клиенты Псины» (этап E4): список клиентов из манифеста и кнопка «Играть».
@@ -80,6 +86,12 @@ fun PsinaClientsScreen(
     var pipeline by remember { mutableStateOf<PlayPipeline?>(null) }
     var playState by remember { mutableStateOf<PlayState>(PlayState.Idle) }
 
+    // Авто-установка ванильной базы для «игры в один тап» на чистом телефоне.
+    val scope = rememberCoroutineScope()
+    var autoInstallFor by remember { mutableStateOf<String?>(null) }
+    var autoInstallProgress by remember { mutableIntStateOf(-1) }
+    var autoInstallError by remember { mutableStateOf<String?>(null) }
+
     LaunchedEffect(Unit) {
         try {
             clients = Store.loadManifest(false).clients
@@ -95,7 +107,7 @@ fun PsinaClientsScreen(
         onDispose { pipeline?.cancelDownload() }
     }
 
-    val startPlay: (ManifestRepo.Client) -> Unit = { client ->
+    fun runPipeline(client: ManifestRepo.Client) {
         val p = PlayPipeline(context)
         pipeline = p
         p.onState = { st ->
@@ -114,6 +126,23 @@ fun PsinaClientsScreen(
         }
         // run() блокирующий (сеть/файлы) — уводим с UI-потока.
         thread(name = "psina-play-${client.id}") { p.run(client.id, Prefs.nickname, Prefs.ramGb) }
+    }
+
+    val startPlay: (ManifestRepo.Client) -> Unit = { client ->
+        val mc = client.mc
+        // На чистом телефоне у форка нет версии psina-<mc>: сначала тихо
+        // ставим ванильную базу штатным установщиком форка (psina-<mc>),
+        // затем сразу продолжаем обычный пайплайн — в один тап для игрока.
+        if (ZalithBackend.findVersion(mc) == null && autoInstallFor == null) {
+            autoInstallProgress = -1
+            autoInstallFor = mc
+            PsinaAutoInstall.startVanillaInstall(context, mc, scope) { ok, err ->
+                autoInstallFor = null
+                if (ok) runPipeline(client) else autoInstallError = err
+            }
+        } else {
+            runPipeline(client)
+        }
     }
 
     BaseScreen(
@@ -164,7 +193,8 @@ fun PsinaClientsScreen(
                     items(clients) { client ->
                         PsinaClientCard(
                             client = client,
-                            busy = playState !is PlayState.Idle &&
+                            busy = autoInstallFor != null ||
+                                playState !is PlayState.Idle &&
                                 playState !is PlayState.LaunchFailed &&
                                 playState !is PlayState.LaunchRequestSent,
                             onPlay = { pendingClient = client }
@@ -173,6 +203,62 @@ fun PsinaClientsScreen(
                 }
             }
         }
+    }
+
+    // Прогресс авто-установки ванильной базы (опрос задач GameInstaller).
+    PsinaAutoInstall.activeInstaller?.let { installer ->
+        LaunchedEffect(installer) {
+            while (isActive && PsinaAutoInstall.activeInstaller === installer) {
+                val running = installer.tasksFlow.value
+                    .filter { it.task.stage.value == TaskStage.RUNNING }
+                autoInstallProgress = if (running.isEmpty()) -1
+                else (running.maxOf { it.task.progress.value }.coerceAtLeast(0f) * 100).toInt()
+                delay(200)
+            }
+        }
+    }
+
+    autoInstallFor?.let { mc ->
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Устанавливаю Minecraft $mc") },
+            text = {
+                Column {
+                    Text(
+                        "Первый запуск: скачиваю ванильную базу $mc. " +
+                            "Это нужно один раз — дальше клиент встанет поверх и запуск станет быстрым."
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    if (autoInstallProgress >= 0) {
+                        LinearProgressIndicator(
+                            progress = { autoInstallProgress / 100f },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text("$autoInstallProgress%")
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    PsinaAutoInstall.cancel()
+                    autoInstallFor = null
+                }) { Text("Отменить") }
+            }
+        )
+    }
+
+    autoInstallError?.let { err ->
+        AlertDialog(
+            onDismissRequest = { autoInstallError = null },
+            title = { Text("Не удалось установить Minecraft") },
+            text = { Text("Проверь интернет и попробуй ещё раз.\n\n$err") },
+            confirmButton = {
+                TextButton(onClick = { autoInstallError = null }) { Text("Понятно") }
+            }
+        )
     }
 
     // Подтверждение: «это мод, а не ваниль».
