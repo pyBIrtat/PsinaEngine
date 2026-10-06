@@ -56,10 +56,22 @@ android {
 
     signingConfigs {
         create("releaseBuild") {
-            storeFile = file("zalith_launcher.jks")
-            storePassword = getKeyFromLocal("STORE_PASSWORD", ".store_password.txt")
-            keyAlias = "movtery_zalith"
-            keyPassword = getKeyFromLocal("KEY_PASSWORD", ".key_password.txt")
+            val storePass = getKeyFromLocal("STORE_PASSWORD", ".store_password.txt")
+            val keyPass = getKeyFromLocal("KEY_PASSWORD", ".key_password.txt")
+            if (storePass.isNotBlank() && keyPass.isNotBlank()) {
+                storeFile = file("zalith_launcher.jks")
+                storePassword = storePass
+                keyAlias = "movtery_zalith"
+                keyPassword = keyPass
+            } else {
+                // Psina-форк: секреты апстрима недоступны — подписываем релиз
+                // ключом из репо (debug-jks), чтобы Release-сборка работала в CI.
+                logger.warn("BUILD: STORE_PASSWORD/KEY_PASSWORD not set; signing release with the in-repo debug key.")
+                storeFile = file("zalith_launcher_debug.jks")
+                storePassword = defaultStorePassword
+                keyAlias = "movtery_zalith_debug"
+                keyPassword = defaultKeyPassword
+            }
         }
         create("debugBuild") {
             storeFile = file("zalith_launcher_debug.jks")
