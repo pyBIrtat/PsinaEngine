@@ -48,7 +48,13 @@ object Installer {
         } else {
             if (client.jar.isBlank()) throw IllegalStateException("в манифесте нет ссылки на jar для ${client.id}")
             onProgress(Progress("Скачиваем ${client.name}", 5))
-            val dst = File(mods, fileNameOf(client.jar))
+            // Клиент со своим mainClass — НЕ мод: кладём в корень инстанса,
+            // он станет version-jar производной версии (см. ZalithBackend).
+            val dst = if (AndroidCompat.needsOwnMain(spec)) {
+                File(Paths.instanceDir(client.mc), fileNameOf(client.jar))
+            } else {
+                File(mods, fileNameOf(client.jar))
+            }
             Net.download(client.jar, dst, client.sha256) { done, len ->
                 val pct = if (len > 0) (done * 60 / len).toInt() else 0
                 onProgress(Progress("Скачиваем ${client.name}", 5 + pct, "${done / 1048576} МБ"))

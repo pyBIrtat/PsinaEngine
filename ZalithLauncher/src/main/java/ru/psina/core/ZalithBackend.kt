@@ -74,6 +74,50 @@ object ZalithBackend {
     }
 
     /**
+     * β-порт клиентов со своим лоадером (mainClass из манифеста): создаём
+     * производную версию psina-<mc>-<clientId> — ванильный json, их jar как
+     * version-jar и их mainClass. Библиотеки/ассеты/нативы — ванильные,
+     * штатные для Android от лаунчера. Эксперимент: их Main может ждать
+     * Windows-окружение (см. notes в манифесте).
+     */
+    fun ensureCustomMainVersion(
+        mc: String,
+        clientId: String,
+        clientJar: File?,
+        mainClass: String
+    ): Version? {
+        return try {
+            val base = findVersion(mc) ?: return null
+            val name = "psina-$mc-$clientId"
+            val versionsDir = File(com.movtery.zalithlauncher.game.path.getGameHome(), "versions")
+            val baseJson = File(File(versionsDir, base.getVersionName()), base.getVersionName() + ".json")
+            if (!baseJson.isFile) return null
+            val targetDir = File(versionsDir, name)
+            targetDir.mkdirs()
+            val jsonFile = File(targetDir, "$name.json")
+            if (!jsonFile.isFile) {
+                val obj = org.json.JSONObject(baseJson.readText())
+                obj.put("id", name)
+                obj.put("mainClass", mainClass)
+                jsonFile.writeText(obj.toString())
+                Logx.i("своя версия собрана: $name (mainClass=$mainClass)")
+            }
+            if (clientJar != null && clientJar.isFile) {
+                val dst = File(targetDir, "$name.jar")
+                if (!dst.exists() || dst.length() != clientJar.length()) {
+                    clientJar.copyTo(dst, overwrite = true)
+                    Logx.i("version-jar подменён на клиентский: ${dst.name}")
+                }
+            }
+            VersionsManager.refresh("[PsinaCustomMain]", name)
+            VersionsManager.versions.value.firstOrNull { it.getVersionName() == name }
+        } catch (e: Exception) {
+            Logx.e("не удалось собрать версию со своим mainClass", e)
+            null
+        }
+    }
+
+    /**
      * Нативный запуск клиента из psina-инстанса средствами этого APK.
      * Возвращает честный outcome: RequestSent — сервис и активити запущены
      * (но «игра работает» мы по-прежнему не обещаем).
@@ -84,10 +128,17 @@ object ZalithBackend {
         nickname: String,
         ramGb: Int,
         extraJvmArgs: List<String> = emptyList(),
-        mainClass: String? = null
+        mainClass: String? = null,
+        clientId: String = "",
+        clientJar: File? = null
     ): NativeOutcome {
         return try {
-            val version = findVersion(mc) ?: return NativeOutcome.VersionMissing(mc)
+            val version = if (!mainClass.isNullOrBlank()) {
+                ensureCustomMainVersion(mc, clientId, clientJar, mainClass)
+                    ?: return NativeOutcome.VersionMissing(mc)
+            } else {
+                findVersion(mc) ?: return NativeOutcome.VersionMissing(mc)
+            }
             syncMods(mc, version)
             applyRam(version, ramGb)
             applyJvmArgs(version, extraJvmArgs)

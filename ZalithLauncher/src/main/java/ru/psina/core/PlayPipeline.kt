@@ -62,8 +62,17 @@ class PlayPipeline(private val ctx: Context) {
 
             // Родной запуск: этот APK сам является движком (Psina Engine, этап E3).
             onState(PlayState.LaunchingMinecraft("Psina Engine"))
+            // β-порт клиентов со своим mainClass: их jar из корня инстанса.
+            val ownMainJar = if (AndroidCompat.needsOwnMain(spec) && client.jar.isNotBlank()) {
+                java.io.File(Paths.instanceDir(client.mc), Installer.fileNameOf(client.jar))
+            } else null
             var nativeMissing: String? = null
-            when (val native = ZalithBackend.nativeLaunch(ctx, client.mc, nickname, ramGb, spec.jvmArgs, spec.mainClass)) {
+            when (
+                val native = ZalithBackend.nativeLaunch(
+                    ctx, client.mc, nickname, ramGb,
+                    spec.jvmArgs, spec.mainClass, clientId, ownMainJar
+                )
+            ) {
                 is ZalithBackend.NativeOutcome.RequestSent -> {
                     onState(PlayState.LaunchRequestSent("Psina Engine"))
                     return
