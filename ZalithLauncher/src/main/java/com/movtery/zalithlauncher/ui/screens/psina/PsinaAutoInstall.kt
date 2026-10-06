@@ -33,7 +33,7 @@ object PsinaAutoInstall {
     ) {
         if (activeInstaller != null) return
         val name = "psina-$mc"
-        Logx.i(TAG, "auto-install vanilla base: $name")
+        Logx.i("auto-install vanilla base: $name")
         val installer = GameInstaller(
             context = context,
             info = GameDownloadInfo(
@@ -45,18 +45,18 @@ object PsinaAutoInstall {
         activeInstaller = installer
         installer.installGame(
             onInstalled = {
-                Logx.i(TAG, "vanilla base installed: $name")
+                Logx.i("vanilla base installed: $name")
                 VersionsManager.refresh("[$TAG]", name)
                 activeInstaller = null
                 onResult(true, null)
             },
             onError = { th ->
-                Logx.e(TAG, "auto-install failed: $name", th)
+                Logx.e("auto-install failed: $name", th)
                 activeInstaller = null
                 onResult(false, th.message ?: th.toString())
             },
             onGameAlreadyInstalled = {
-                Logx.i(TAG, "vanilla base already installed: $name")
+                Logx.i("vanilla base already installed: $name")
                 VersionsManager.refresh("[$TAG]", name)
                 activeInstaller = null
                 onResult(true, null)
