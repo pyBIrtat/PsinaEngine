@@ -106,6 +106,7 @@ import com.movtery.zalithlauncher.ui.screens.content.navigateToDownload
 import com.movtery.zalithlauncher.ui.screens.navigateTo
 import com.movtery.zalithlauncher.ui.screens.onBack
 import com.movtery.zalithlauncher.ui.screens.psina.PsinaClientsScreen
+import com.movtery.zalithlauncher.ui.screens.psina.PsinaSettingsScreen
 import com.movtery.zalithlauncher.ui.screens.rememberTransitionSpec
 import com.movtery.zalithlauncher.ui.theme.backgroundColor
 import com.movtery.zalithlauncher.ui.theme.cardColor
@@ -582,7 +583,24 @@ private fun NavigationUI(
                 }
                 entry<NormalNavKey.PsinaClients> {
                     PsinaClientsScreen(
-                        backStackViewModel = screenBackStackModel
+                        backStackViewModel = screenBackStackModel,
+                        toPsinaSettings = {
+                            screenBackStackModel.mainScreen.navigateTo(NormalNavKey.PsinaSettings)
+                        }
+                    )
+                }
+                entry<NormalNavKey.PsinaSettings> {
+                    PsinaSettingsScreen(
+                        backStackViewModel = screenBackStackModel,
+                        toControlManager = {
+                            screenBackStackModel.mainScreen.removeAndNavigateTo(
+                                removes = screenBackStackModel.clearBeforeNavKeys,
+                                screenKey = screenBackStackModel.settingsScreen
+                            )
+                            screenBackStackModel.settingsScreen.navigateTo(
+                                NormalNavKey.Settings.ControlManager
+                            )
+                        }
                     )
                 }
                 entry<NormalNavKey.VersionsManager> {

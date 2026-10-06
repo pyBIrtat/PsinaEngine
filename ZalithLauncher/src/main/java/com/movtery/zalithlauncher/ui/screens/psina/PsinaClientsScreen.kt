@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -67,7 +68,8 @@ import ru.psina.core.Support
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PsinaClientsScreen(
-    backStackViewModel: ScreenBackStackViewModel
+    backStackViewModel: ScreenBackStackViewModel,
+    toPsinaSettings: () -> Unit = {}
 ) {
     val context = LocalContext.current
 
@@ -146,9 +148,10 @@ fun PsinaClientsScreen(
                 ) {
                     item {
                         Text(
-                            text = "Игра без аккаунта: ник офлайн-профиля — «${Prefs.nickname}»",
+                            text = "Игра без аккаунта: ник офлайн-профиля — «${Prefs.nickname}» · нажми, чтобы настроить",
                             style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.clickable { toPsinaSettings() }
                         )
                     }
                     items(clients) { client ->
