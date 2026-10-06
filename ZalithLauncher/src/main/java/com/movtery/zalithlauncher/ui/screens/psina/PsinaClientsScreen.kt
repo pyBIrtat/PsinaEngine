@@ -46,13 +46,13 @@ import com.movtery.zalithlauncher.ui.base.BaseScreen
 import com.movtery.zalithlauncher.ui.screens.NormalNavKey
 import com.movtery.zalithlauncher.viewmodel.ScreenBackStackViewModel
 import kotlin.concurrent.thread
-import ru.psina.core.AndroidCompat
 import ru.psina.core.Logx
 import ru.psina.core.ManifestRepo
 import ru.psina.core.PlayPipeline
 import ru.psina.core.PlayState
 import ru.psina.core.Prefs
 import ru.psina.core.Store
+import ru.psina.core.Support
 
 /**
  * Экран «Клиенты Псины» (этап E4): список клиентов из манифеста и кнопка «Играть».
@@ -252,9 +252,9 @@ fun PsinaClientsScreen(
 }
 
 private fun supportLabel(client: ManifestRepo.Client): String = when (client.support) {
-    AndroidCompat.Support.READY -> "готов к запуску"
-    AndroidCompat.Support.EXPERIMENTAL -> "экспериментально"
-    AndroidCompat.Support.PC_ONLY -> "только на ПК"
+    Support.READY -> "готов к запуску"
+    Support.EXPERIMENTAL -> "экспериментально"
+    Support.PC_ONLY -> "только на ПК"
 }
 
 @Composable
