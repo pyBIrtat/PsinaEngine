@@ -80,8 +80,8 @@ object Net {
         val owner = "pyBIrtat"
         val repo = "PsinaLauncher"
         return listOf(
-            "https://cdn.jsdelivr.net/gh/$owner/$repo@main/$path",
             "https://raw.githubusercontent.com/$owner/$repo/main/$path",
+            "https://cdn.jsdelivr.net/gh/$owner/$repo@main/$path",
             "https://github.com/$owner/$repo/releases/latest/download/$path"
         )
     }

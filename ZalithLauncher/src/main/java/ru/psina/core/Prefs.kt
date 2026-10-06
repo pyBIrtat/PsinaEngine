@@ -64,6 +64,8 @@ object Prefs {
         get() = sp.getString("manifestUrl", DEFAULT_MANIFEST) ?: DEFAULT_MANIFEST
         set(v) = sp.edit().putString("manifestUrl", v).apply()
 
+    // raw.githubusercontent: манифест меняется (обновления/удаления клиентов) —
+    // важна свежесть, а не скорость CDN; jsdelivr остаётся зеркалом в Net.
     const val DEFAULT_MANIFEST =
-        "https://cdn.jsdelivr.net/gh/pyBIrtat/PsinaLauncher@main/launcher-online.json"
+        "https://raw.githubusercontent.com/pyBIrtat/PsinaLauncher/main/launcher-online.json"
 }
