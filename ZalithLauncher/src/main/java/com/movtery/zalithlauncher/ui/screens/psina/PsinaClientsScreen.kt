@@ -1,8 +1,5 @@
 package com.movtery.zalithlauncher.ui.screens.psina
 
-import android.content.Intent
-import android.net.Uri
-import android.provider.Settings
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -103,7 +100,17 @@ fun PsinaClientsScreen(
         pipeline = p
         p.onState = { st ->
             playState = st
-            if (st is PlayState.LaunchRequestSent) Prefs.clientId = client.id
+            if (st is PlayState.LaunchRequestSent) {
+                Prefs.clientId = client.id
+                // Экспериментальные портативки могут запросить у игры права на
+                // SMS/звонки — один раз честно предупреждаем после запуска.
+                if (client.support == Support.EXPERIMENTAL && !Prefs.smsExplained) {
+                    Prefs.smsExplained = true
+                    smsDialog =
+                        "Если игра попросит доступ к SMS или звонкам — это для определения модели " +
+                            "телефона. Ничего не отправляется: можно отказать, игра будет работать."
+                }
+            }
         }
         // run() блокирующий (сеть/файлы) — уводим с UI-потока.
         thread(name = "psina-play-${client.id}") { p.run(client.id, Prefs.nickname, Prefs.ramGb) }
@@ -192,25 +199,15 @@ fun PsinaClientsScreen(
         )
     }
 
-    // Объяснение прав SMS/звонков (клиенты могут запросить; мы не просим заранее).
+    // Объяснение прав SMS/звонков: показываем один раз после первого
+    // experimental-запуска — игра может запросить их у пользователя.
     smsDialog?.let { msg ->
         AlertDialog(
             onDismissRequest = { smsDialog = null },
             title = { Text("Права на SMS и звонки") },
             text = { Text(msg) },
             confirmButton = {
-                TextButton(onClick = {
-                    smsDialog = null
-                    runCatching {
-                        context.startActivity(
-                            Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS)
-                                .setData(Uri.fromParts("package", context.packageName, null))
-                        )
-                    }
-                }) { Text("Открыть настройки") }
-            },
-            dismissButton = {
-                TextButton(onClick = { smsDialog = null }) { Text("Позже") }
+                TextButton(onClick = { smsDialog = null }) { Text("Понятно") }
             }
         )
     }

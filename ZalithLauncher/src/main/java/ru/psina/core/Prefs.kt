@@ -31,6 +31,11 @@ object Prefs {
         get() = sp.getString("clientId", null)
         set(v) = sp.edit().putString("clientId", v).apply()
 
+    /** Показывали ли уже объяснение про права SMS/звонков (после первого experimental-запуска). */
+    var smsExplained: Boolean
+        get() = sp.getBoolean("smsExplained", false)
+        set(v) = sp.edit().putBoolean("smsExplained", v).apply()
+
     var serverId: String?
         get() = sp.getString("serverId", null)
         set(v) = sp.edit().putString("serverId", v).apply()
