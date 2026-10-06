@@ -22,8 +22,8 @@ import java.io.File
  * Отличия от внешних движков (Engine.requestLaunch):
  *  - нет best-effort extras: это наш процесс, контракт настоящий;
  *  - ник становится локальным офлайн-профиле (accessToken "0");
- *  - RAM управляется настройками версии форка (VersionConfig.ramAllocation),
- *    поле ramGb из psina-профиля пока только логируется (TODO E4).
+ *  - RAM из настроек Псины записывается в конфиг psina-версии
+ *    (VersionConfig.ramAllocation) — у чужих версий свои настройки не трогаем.
  */
 object ZalithBackend {
 
@@ -89,10 +89,12 @@ object ZalithBackend {
         return try {
             val version = findVersion(mc) ?: return NativeOutcome.VersionMissing(mc)
             syncMods(mc, version)
+            applyRam(version, ramGb)
             // Локальный офлайн-профиль — как LOCAL-аккаунты форка (accessToken "0").
-            val account = Account(username = nickname, accountType = AccountType.LOCAL.tag)
+            val nick = nickname.trim().ifBlank { "Player" }
+            val account = Account(username = nick, accountType = AccountType.LOCAL.tag)
             Logx.i(
-                "нативный запуск: версия ${version.getVersionName()}, игрок $nickname " +
+                "нативный запуск: версия ${version.getVersionName()}, игрок $nick " +
                     "(ram=$ramGb ГБ, jvmArgs=${extraJvmArgs.size}, mainClass=$mainClass)"
             )
             runGame(ctx, version, account)
@@ -100,6 +102,23 @@ object ZalithBackend {
         } catch (e: Exception) {
             Logx.e("нативный запуск не удался", e)
             NativeOutcome.Failed(e.message ?: e.toString())
+        }
+    }
+
+    /**
+     * RAM из настроек Псины → конфиг psina-версии (в MB). Затрагиваем только
+     * версии с префиксом VERSION_PREFIX: у своих (без префикса) конфиг не
+     * трогаем. GetRamAllocation дополнительно ограничит по памяти устройства.
+     */
+    private fun applyRam(version: Version, ramGb: Int) {
+        if (ramGb <= 0) return
+        if (!version.getVersionName().startsWith(VERSION_PREFIX)) return
+        val ramMb = ramGb * 1024
+        val cfg = version.getVersionConfig()
+        if (cfg.ramAllocation != ramMb) {
+            cfg.ramAllocation = ramMb
+            cfg.save()
+            Logx.i("RAM Псины применена к ${version.getVersionName()}: $ramMb МБ")
         }
     }
 }
