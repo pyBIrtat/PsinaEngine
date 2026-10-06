@@ -24,14 +24,15 @@ object PsinaAutoInstall {
     /**
      * Запуск установки ванильной базы psina-<mc> (вызывать из композиции:
      * GameInstaller исполняет задачи в переданном scope).
+     * @return false, если начать не удалось (установка уже идёт).
      */
     fun startVanillaInstall(
         context: Context,
         mc: String,
         scope: CoroutineScope,
         onResult: (ok: Boolean, error: String?) -> Unit
-    ) {
-        if (activeInstaller != null) return
+    ): Boolean {
+        if (activeInstaller != null) return false
         val name = "psina-$mc"
         Logx.i("auto-install vanilla base: $name")
         val installer = GameInstaller(
@@ -62,6 +63,7 @@ object PsinaAutoInstall {
                 onResult(true, null)
             }
         )
+        return true
     }
 
     /** Отмена установки (кнопка в диалоге). */

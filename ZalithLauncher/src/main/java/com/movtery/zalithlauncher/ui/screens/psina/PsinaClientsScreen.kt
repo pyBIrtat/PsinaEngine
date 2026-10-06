@@ -53,8 +53,10 @@ import com.movtery.zalithlauncher.ui.base.BaseScreen
 import com.movtery.zalithlauncher.ui.screens.NormalNavKey
 import com.movtery.zalithlauncher.viewmodel.ScreenBackStackViewModel
 import kotlin.concurrent.thread
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.withContext
 import ru.psina.core.Logx
 import ru.psina.core.ManifestRepo
 import ru.psina.core.PlayPipeline
@@ -101,11 +103,15 @@ fun PsinaClientsScreen(
     var autoInstallError by remember { mutableStateOf<String?>(null) }
 
     // Первый показ — кэш/сеть; «Обновить» и «Повторить» — force из сети.
+    // СЕТЬ — только с Dispatchers.IO: на главном потоке Android кидает
+    // NetworkOnMainThreadException (баг первых релизов — манифест не грузился).
     LaunchedEffect(refreshTick) {
         loading = true
         error = null
         try {
-            clients = Store.loadManifest(force = refreshTick > 0).clients
+            clients = withContext(Dispatchers.IO) {
+                Store.loadManifest(force = refreshTick > 0).clients
+            }
         } catch (e: Exception) {
             Logx.e("не удалось загрузить манифест клиентов", e)
             error = e.message ?: e.toString()
@@ -115,7 +121,11 @@ fun PsinaClientsScreen(
     }
 
     DisposableEffect(Unit) {
-        onDispose { pipeline?.cancelDownload() }
+        onDispose {
+            pipeline?.cancelDownload()
+            // Уход с экрана посреди авто-установки: не оставляем полу-версию.
+            PsinaAutoInstall.cancel()
+        }
     }
 
     fun runPipeline(client: ManifestRepo.Client) {
@@ -147,10 +157,13 @@ fun PsinaClientsScreen(
         if (ZalithBackend.findVersion(mc) == null && autoInstallFor == null) {
             autoInstallProgress = -1
             autoInstallFor = mc
-            PsinaAutoInstall.startVanillaInstall(context, mc, scope) { ok, err ->
+            val started = PsinaAutoInstall.startVanillaInstall(context, mc, scope) { ok, err ->
                 autoInstallFor = null
                 if (ok) runPipeline(client) else autoInstallError = err
             }
+            // Не смогли даже начать (установка уже идёт) — не оставляем
+            // вечный диалог прогресса.
+            if (!started) autoInstallFor = null
         } else {
             runPipeline(client)
         }
