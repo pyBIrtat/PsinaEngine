@@ -1,5 +1,7 @@
 package com.movtery.zalithlauncher.ui.screens.psina
 
+import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -10,7 +12,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -22,6 +24,7 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -37,10 +40,13 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import coil3.compose.AsyncImage
 import com.movtery.zalithlauncher.R
 import com.movtery.zalithlauncher.coroutine.TaskStage
 import com.movtery.zalithlauncher.ui.base.BaseScreen
@@ -59,14 +65,14 @@ import ru.psina.core.Support
 import ru.psina.core.ZalithBackend
 
 /**
- * Экран «Клиенты Псины» (этап E4): список клиентов из манифеста и кнопка «Играть».
+ * Экран «Клиенты Псины»: список клиентов из манифеста и кнопка «Играть».
  *
  * Тяжёлая работа — в PlayPipeline (ru.psina.core): манифест → совместимость →
  * файлы → установка инстанса → родной запуск через ZalithBackend (runGame) с
- * фолбэком на внешние движки. Здесь только состояние (PlayState) и диалоги:
- *  - подтверждение «клиент — не ванильный Minecraft» (осознанный запуск мода);
- *  - объяснение прав SMS/звонков, которые запрашивают некоторые клиенты
- *    (ничего не отправляется, права можно не давать).
+ * фолбэком на внешние движки. Здесь только состояние (PlayState) и диалоги.
+ *
+ * Список: поиск по имени/версии, сортировка (готовые → экспериментальные →
+ * только ПК), логотипы из репозитория конфигов (jsdelivr), обновление манифеста.
  */
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -77,6 +83,8 @@ fun PsinaClientsScreen(
     val context = LocalContext.current
 
     var clients by remember { mutableStateOf<List<ManifestRepo.Client>>(emptyList()) }
+    var query by remember { mutableStateOf("") }
+    var refreshTick by remember { mutableIntStateOf(0) }
     var loading by remember { mutableStateOf(true) }
     var error by remember { mutableStateOf<String?>(null) }
 
@@ -92,9 +100,12 @@ fun PsinaClientsScreen(
     var autoInstallProgress by remember { mutableIntStateOf(-1) }
     var autoInstallError by remember { mutableStateOf<String?>(null) }
 
-    LaunchedEffect(Unit) {
+    // Первый показ — кэш/сеть; «Обновить» и «Повторить» — force из сети.
+    LaunchedEffect(refreshTick) {
+        loading = true
+        error = null
         try {
-            clients = Store.loadManifest(false).clients
+            clients = Store.loadManifest(force = refreshTick > 0).clients
         } catch (e: Exception) {
             Logx.e("не удалось загрузить манифест клиентов", e)
             error = e.message ?: e.toString()
@@ -145,6 +156,26 @@ fun PsinaClientsScreen(
         }
     }
 
+    // Поиск + сортировка: сначала готовые к запуску, затем экспериментальные,
+    // в конце «только на ПК»; внутри группы — по алфавиту.
+    val shownClients = remember(clients, query) {
+        val q = query.trim()
+        clients
+            .filter { q.isBlank() || it.name.contains(q, true) || it.mc.contains(q, true) }
+            .sortedWith(
+                compareBy(
+                    { c ->
+                        when (c.support) {
+                            Support.READY -> 0
+                            Support.EXPERIMENTAL -> 1
+                            Support.PC_ONLY -> 2
+                        }
+                    },
+                    { c -> c.name.lowercase() }
+                )
+            )
+    }
+
     BaseScreen(
         screenKey = NormalNavKey.PsinaClients,
         currentKey = backStackViewModel.mainScreen.currentKey
@@ -162,6 +193,14 @@ fun PsinaClientsScreen(
                                 contentDescription = null
                             )
                         }
+                    },
+                    actions = {
+                        IconButton(onClick = { refreshTick++ }, enabled = !loading) {
+                            Icon(
+                                painter = painterResource(R.drawable.ic_refresh),
+                                contentDescription = "Обновить список"
+                            )
+                        }
                     }
                 )
             }
@@ -175,30 +214,59 @@ fun PsinaClientsScreen(
                 error != null -> Box(
                     modifier = Modifier.fillMaxSize().padding(padding),
                     contentAlignment = Alignment.Center
-                ) { Text("Манифест недоступен: $error") }
-
-                else -> LazyColumn(
-                    modifier = Modifier.fillMaxSize().padding(padding),
-                    contentPadding = PaddingValues(12.dp),
-                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    item {
-                        Text(
-                            text = "Игра без аккаунта: ник офлайн-профиля — «${Prefs.nickname}» · нажми, чтобы настроить",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.clickable { toPsinaSettings() }
-                        )
+                    Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                        Text("Манифест недоступен: $error")
+                        Spacer(Modifier.height(8.dp))
+                        Button(onClick = { refreshTick++ }) { Text("Повторить") }
                     }
-                    items(clients) { client ->
-                        PsinaClientCard(
-                            client = client,
-                            busy = autoInstallFor != null ||
-                                playState !is PlayState.Idle &&
-                                playState !is PlayState.LaunchFailed &&
-                                playState !is PlayState.LaunchRequestSent,
-                            onPlay = { pendingClient = client }
-                        )
+                }
+
+                else -> Column(
+                    modifier = Modifier.fillMaxSize().padding(padding)
+                ) {
+                    OutlinedTextField(
+                        value = query,
+                        onValueChange = { query = it },
+                        placeholder = { Text("Поиск клиента или версии") },
+                        singleLine = true,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(horizontal = 12.dp, vertical = 8.dp)
+                    )
+
+                    LazyColumn(
+                        modifier = Modifier.fillMaxSize(),
+                        contentPadding = PaddingValues(12.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)
+                    ) {
+                        item {
+                            Text(
+                                text = "Игра без аккаунта: ник офлайн-профиля — «${Prefs.nickname}» · нажми, чтобы настроить",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                modifier = Modifier.clickable { toPsinaSettings() }
+                            )
+                        }
+                        if (shownClients.isEmpty()) {
+                            item {
+                                Text(
+                                    text = "Ничего не найдено по «$query»",
+                                    style = MaterialTheme.typography.bodyMedium,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                                )
+                            }
+                        }
+                        items(shownClients) { client ->
+                            PsinaClientCard(
+                                client = client,
+                                busy = autoInstallFor != null ||
+                                    playState !is PlayState.Idle &&
+                                    playState !is PlayState.LaunchFailed &&
+                                    playState !is PlayState.LaunchRequestSent,
+                                onPlay = { pendingClient = client }
+                            )
+                        }
                     }
                 }
             }
@@ -337,6 +405,10 @@ fun PsinaClientsScreen(
     }
 }
 
+/** Логотип клиента: детерминированный путь в репозитории конфигов. */
+private fun logoUrl(client: ManifestRepo.Client): String =
+    "https://cdn.jsdelivr.net/gh/pyBIrtat/PsinaLauncher@main/clients/${client.mc}/${client.id}.png"
+
 private fun supportLabel(client: ManifestRepo.Client): String = when (client.support) {
     Support.READY -> "готов к запуску"
     Support.EXPERIMENTAL -> "экспериментально"
@@ -354,6 +426,33 @@ private fun PsinaClientCard(
             modifier = Modifier.fillMaxWidth().padding(12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
+            // Логотип с буквенным фолбэком, пока картинка грузится/нет в репо.
+            Box(
+                modifier = Modifier
+                    .size(48.dp)
+                    .clip(MaterialTheme.shapes.medium),
+                contentAlignment = Alignment.Center
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(MaterialTheme.colorScheme.surfaceVariant),
+                    contentAlignment = Alignment.Center
+                ) {
+                    Text(
+                        text = client.name.take(1).uppercase(),
+                        style = MaterialTheme.typography.titleMedium
+                    )
+                }
+                AsyncImage(
+                    model = logoUrl(client),
+                    contentDescription = null,
+                    contentScale = ContentScale.Crop,
+                    modifier = Modifier.fillMaxSize()
+                )
+            }
+            Spacer(Modifier.size(10.dp))
+
             Column(Modifier.weight(1f)) {
                 Text(
                     text = client.name,
@@ -376,12 +475,22 @@ private fun PsinaClientCard(
                     )
                 }
             }
-            Button(onClick = onPlay, enabled = !busy) {
-                Icon(
-                    painter = painterResource(R.drawable.ic_play_arrow_filled),
-                    contentDescription = null
+
+            if (client.support == Support.PC_ONLY) {
+                // Запускать с телефона нельзя честно: кнопки нет, объяснение на карточке.
+                Text(
+                    text = "Нужен ПК",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
-                Text("Играть")
+            } else {
+                Button(onClick = onPlay, enabled = !busy) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_play_arrow_filled),
+                        contentDescription = null
+                    )
+                    Text("Играть")
+                }
             }
         }
     }
