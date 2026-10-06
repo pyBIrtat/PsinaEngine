@@ -90,6 +90,7 @@ object ZalithBackend {
             val version = findVersion(mc) ?: return NativeOutcome.VersionMissing(mc)
             syncMods(mc, version)
             applyRam(version, ramGb)
+            applyJvmArgs(version, extraJvmArgs)
             // Локальный офлайн-профиль — как LOCAL-аккаунты форка (accessToken "0").
             val nick = nickname.trim().ifBlank { "Player" }
             val account = Account(username = nick, accountType = AccountType.LOCAL.tag)
@@ -102,6 +103,23 @@ object ZalithBackend {
         } catch (e: Exception) {
             Logx.e("нативный запуск не удался", e)
             NativeOutcome.Failed(e.message ?: e.toString())
+        }
+    }
+
+    /**
+     * JVM-аргументы клиента из манифеста → конфиг psina-версии: нативный
+     * запуск учитывает versionConfig.jvmArgs (GameLauncher.customArgs).
+     * Только для версий psina-*: у чужих версий конфиг не трогаем.
+     */
+    private fun applyJvmArgs(version: Version, args: List<String>) {
+        if (args.isEmpty()) return
+        if (!version.getVersionName().startsWith(VERSION_PREFIX)) return
+        val joined = args.joinToString(" ")
+        val cfg = version.getVersionConfig()
+        if (cfg.jvmArgs != joined) {
+            cfg.jvmArgs = joined
+            cfg.save()
+            Logx.i("JVM-аргументы клиента применены к ${version.getVersionName()} (${args.size} шт.)")
         }
     }
 
