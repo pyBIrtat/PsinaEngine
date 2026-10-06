@@ -119,6 +119,7 @@ fun LauncherScreen(
     navigateToVersions: (Version) -> Unit,
     onLaunchGame: (Version?) -> Unit,
     onOpenLink: (String) -> Unit,
+    toPsinaClients: () -> Unit,
     startGuideOnce: (GuideKeys.Keys) -> Unit,
 ) {
     LaunchedEffect(Unit) {
@@ -240,7 +241,8 @@ fun LauncherScreen(
                         pickUpScale = { dragState.scale },
                         toAccountManageScreen = toAccountManageScreen,
                         toVersionManageScreen = toVersionManageScreen,
-                        toVersionSettingsScreen = toVersionSettingsScreen
+                        toVersionSettingsScreen = toVersionSettingsScreen,
+                        toPsinaClients = toPsinaClients
                     )
                 }
             }
@@ -373,6 +375,7 @@ private fun VersionsContent(
     onLaunchGame: (Version?) -> Unit,
     toVersionManageScreen: () -> Unit,
     toVersionSettingsScreen: () -> Unit,
+    toPsinaClients: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val version by VersionsManager.currentVersion.collectAsStateWithLifecycle()
@@ -483,6 +486,18 @@ private fun VersionsContent(
                 MarqueeText(text = stringResource(R.string.main_launch_game))
             }
         )
+
+        ScalingActionButton(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(PaddingValues(horizontal = 12.dp))
+                .padding(bottom = 8.dp),
+            elevation = ButtonDefaults.buttonElevation(defaultElevation = 1.dp),
+            onClick = toPsinaClients,
+            content = {
+                MarqueeText(text = "Клиенты Псины")
+            }
+        )
     }
 }
 
@@ -494,6 +509,7 @@ private fun ActionMenuCardContent(
     toAccountManageScreen: () -> Unit,
     toVersionManageScreen: () -> Unit,
     toVersionSettingsScreen: () -> Unit,
+    toPsinaClients: () -> Unit,
 ) {
     BackgroundCard(
         modifier = Modifier
@@ -531,6 +547,7 @@ private fun ActionMenuCardContent(
                 onLaunchGame = onLaunchGame,
                 toVersionManageScreen = toVersionManageScreen,
                 toVersionSettingsScreen = toVersionSettingsScreen,
+                toPsinaClients = toPsinaClients,
             )
         }
     }
@@ -545,6 +562,7 @@ private fun ActionMenuTallerContent(
     toAccountManageScreen: () -> Unit,
     toVersionManageScreen: () -> Unit,
     toVersionSettingsScreen: () -> Unit,
+    toPsinaClients: () -> Unit,
 ) {
     val refreshWardrobe by AccountsManager.refreshWardrobe.collectAsStateWithLifecycle()
     val skinFile = remember(account, refreshWardrobe) {
@@ -604,6 +622,7 @@ private fun ActionMenuTallerContent(
                 onLaunchGame = onLaunchGame,
                 toVersionManageScreen = toVersionManageScreen,
                 toVersionSettingsScreen = toVersionSettingsScreen,
+                toPsinaClients = toPsinaClients,
             )
         }
     }
@@ -620,7 +639,8 @@ private fun ActionMenu(
     modifier: Modifier = Modifier,
     toAccountManageScreen: () -> Unit = {},
     toVersionManageScreen: () -> Unit = {},
-    toVersionSettingsScreen: () -> Unit = {}
+    toVersionSettingsScreen: () -> Unit = {},
+    toPsinaClients: () -> Unit = {}
 ) {
     val xOffset by swapAnimateDpAsState(
         targetValue = swapTargetValue,
@@ -645,6 +665,7 @@ private fun ActionMenu(
             toAccountManageScreen = toAccountManageScreen,
             toVersionManageScreen = toVersionManageScreen,
             toVersionSettingsScreen = toVersionSettingsScreen,
+            toPsinaClients = toPsinaClients,
         )
     } else {
         ActionMenuCardContent(
@@ -654,6 +675,7 @@ private fun ActionMenu(
             toAccountManageScreen = toAccountManageScreen,
             toVersionManageScreen = toVersionManageScreen,
             toVersionSettingsScreen = toVersionSettingsScreen,
+            toPsinaClients = toPsinaClients,
         )
     }
 }

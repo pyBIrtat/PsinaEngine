@@ -105,6 +105,7 @@ import com.movtery.zalithlauncher.ui.screens.content.assetinfo.AssetInfoScreen
 import com.movtery.zalithlauncher.ui.screens.content.navigateToDownload
 import com.movtery.zalithlauncher.ui.screens.navigateTo
 import com.movtery.zalithlauncher.ui.screens.onBack
+import com.movtery.zalithlauncher.ui.screens.psina.PsinaClientsScreen
 import com.movtery.zalithlauncher.ui.screens.rememberTransitionSpec
 import com.movtery.zalithlauncher.ui.theme.backgroundColor
 import com.movtery.zalithlauncher.ui.theme.cardColor
@@ -535,6 +536,9 @@ private fun NavigationUI(
                         onOpenLink = {
                             eventViewModel.sendEvent(EventViewModel.Event.OpenLink(it))
                         },
+                        toPsinaClients = {
+                            screenBackStackModel.mainScreen.navigateTo(NormalNavKey.PsinaClients)
+                        },
                         startGuideOnce = { keys ->
                             eventViewModel.sendStartGuideOnce(keys)
                         }
@@ -574,6 +578,11 @@ private fun NavigationUI(
                         key = key,
                         backStackViewModel = screenBackStackModel,
                         eventViewModel = eventViewModel
+                    )
+                }
+                entry<NormalNavKey.PsinaClients> {
+                    PsinaClientsScreen(
+                        backStackViewModel = screenBackStackModel
                     )
                 }
                 entry<NormalNavKey.VersionsManager> {

@@ -38,6 +38,10 @@ sealed interface NormalNavKey : TitledNavKey {
     @Serializable data object UnpackDeps: NormalNavKey
     /** 启动器主页屏幕 */
     @Serializable data object LauncherMain : NormalNavKey
+    /** Psina: экран клиентов Псины (E4) — список клиентов и кнопка «Играть» */
+    @Serializable data object PsinaClients : NormalNavKey
+    /** Psina: настройки Псины (ник, RAM) */
+    @Serializable data object PsinaSettings : NormalNavKey
     /** 账号管理屏幕 */
     @Serializable data class AccountManager(
         val loginMenu: FirstLoginMenu = FirstLoginMenu.NONE
