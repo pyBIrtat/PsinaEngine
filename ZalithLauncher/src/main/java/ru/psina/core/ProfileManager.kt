@@ -67,6 +67,26 @@ object ProfileManager {
         return VerifyResult(ok, missing, corrupt)
     }
 
+    /** Относительные пути из текущего ledger (снимок до переустановки). */
+    fun installedPaths(clientId: String, mc: String): List<String> =
+        read(clientId, mc).map { it.path }
+
+    /**
+     * Обновление клиента: удаляет файлы старой установки, которых нет в новой
+     * (например, jar старой версии в mods, чтобы не осталось двух клиентов).
+     */
+    fun deleteStale(clientId: String, mc: String, oldPaths: List<String>, keep: List<File>) {
+        val base = Paths.instanceDir(mc)
+        val keepRel = keep.mapNotNull { it.takeIf(File::isFile)?.relativeToOrNull(base)?.path }.toSet()
+        oldPaths.filter { it !in keepRel }.forEach { rel ->
+            val f = File(base, rel)
+            if (f.isFile) {
+                f.delete()
+                Logx.i("обновление: удалён устаревший ${f.name}")
+            }
+        }
+    }
+
     fun deleteProfile(clientId: String, mc: String) {
         Paths.instanceDir(mc).deleteRecursively()
         Store.uninstall(clientId, mc)

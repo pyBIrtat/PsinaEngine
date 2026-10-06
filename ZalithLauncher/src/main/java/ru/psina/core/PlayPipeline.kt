@@ -36,15 +36,25 @@ class PlayPipeline(private val ctx: Context) {
 
             onState(PlayState.CheckingFiles)
             val verify = ProfileManager.verify(clientId, client.mc)
-            if (!verify.needsReinstall && Store.isInstalled(clientId)) {
+            // Обновление: манифест указывает на другой файл клиента, чем стоит
+            // в профиле (автор выпустил новую сборку) — переустанавливаем.
+            val jarName = client.jar.takeIf { it.isNotBlank() }?.let { Installer.fileNameOf(it) }
+            val jarMissing = jarName != null &&
+                ProfileManager.installedPaths(clientId, client.mc)
+                    .none { it == jarName || it.endsWith("/$jarName") }
+            if (!verify.needsReinstall && !jarMissing && Store.isInstalled(clientId)) {
                 Logx.i("профиль $clientId/${client.mc} уже проверен — установка не требуется")
             } else {
+                if (jarMissing) Logx.i("в манифесте новый файл клиента ($jarName) — обновляю профиль")
+                val oldPaths = ProfileManager.installedPaths(clientId, client.mc)
                 onState(PlayState.Installing)
                 val result = Installer.install(client) { p ->
                     onState(PlayState.Downloading(p.detail.ifBlank { p.stage }, 0, 0, p.percent))
                 }
                 onState(PlayState.Verifying)
                 ProfileManager.record(clientId, client.mc, result.files)
+                // Убираем файлы старой сборки, чтобы в mods не осталось двух клиентов.
+                ProfileManager.deleteStale(clientId, client.mc, oldPaths, result.files)
             }
 
             onState(PlayState.PreparingMobileProfile)
