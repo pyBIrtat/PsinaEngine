@@ -50,6 +50,9 @@ object Paths {
     private fun dir(parent: File, name: String): File =
         File(parent, name).apply { mkdirs() }
 
+    private fun dir(app: Context, name: String): File =
+        dir(app.filesDir, name)
+
     /** Корневой каталог psina-данных; ленивый фолбэк до явного init(). */
     val root: File
         get() {

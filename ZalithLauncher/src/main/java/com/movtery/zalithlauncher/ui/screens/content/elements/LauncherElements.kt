@@ -131,8 +131,11 @@ sealed interface LaunchGameOperation {
     data object NoVersion : LaunchGameOperation
     /** 版本名称非法时 */
     data class InvalidVersionName(val th: InvalidFilenameException) : LaunchGameOperation
-    /** 没有可用账号 */
-    data object NoAccount : LaunchGameOperation
+    /** 没有可用账号 (Psina fork: несёт версию, чтобы стартовать офлайн-аккаунтом) */
+    data class NoAccount(
+        val version: Version,
+        val quickPlay: QuickPlay?
+    ) : LaunchGameOperation
 
     /** 渲染器可配置，但需要用到文件管理权限 */
     data class RendererNoStoragePermission(
@@ -304,7 +307,7 @@ fun LaunchGameOperation(
                 val quickPlay = operation.quickPlay
 
                 AccountsManager.currentAccountFlow.value ?: run {
-                    launchGameViewModel.updateOperation(LaunchGameOperation.NoAccount)
+                    launchGameViewModel.updateOperation(LaunchGameOperation.NoAccount(version, quickPlay))
                     return@LaunchedEffect
                 }
 
