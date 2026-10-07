@@ -105,10 +105,13 @@ class GameLaunchFlow(scope: CoroutineScope) {
         val account = AccountsManager.currentAccountFlow.value ?: run {
             val nick = ru.psina.core.Prefs.nickname.trim().ifBlank { "Player" }
             val fallback = Account(username = nick, accountType = AccountType.LOCAL.tag)
-            val created = runCatching {
-                kotlinx.coroutines.runBlocking { AccountsManager.suspendSaveAccount(fallback) }
+            val persisted: Account = runCatching {
+                kotlinx.coroutines.runBlocking<Account> {
+                    AccountsManager.suspendSaveAccount(fallback)
+                    fallback
+                }
             }.getOrDefault(fallback)
-            created
+            persisted
         }
 
         taskExecutor.executePhasesAsync(
