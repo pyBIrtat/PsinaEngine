@@ -64,6 +64,29 @@ class PlayPipeline(private val ctx: Context) {
                 ProfileManager.deleteStale(clientId, client.mc, oldPaths, result.files)
             }
 
+            // fabric-api обязателен ЛЮБОМУ Fabric-клиенту: если он не докачался при
+            // установке (сеть/Modrinth), установка всё равно «прошла» — и Fabric на
+            // устройстве выдал бы «requires any version of fabric-api, which is
+            // missing!» (как у велки на ПК). Самолечение на каждом запуске.
+            if (!ownMain) {
+                val modsDir = Paths.modsDir(client.mc)
+                val hasFa = modsDir.listFiles()
+                    ?.any { it.isFile && it.name.endsWith(".jar", true) && it.name.contains("fabric-api", true) } == true
+                if (!hasFa) {
+                    onState(PlayState.Downloading("Добавляю fabric-api", 0, 0, -1))
+                    Logx.i("в инстансе ${client.mc} нет fabric-api — добавляю")
+                    try {
+                        val url = Modrinth.latestFile("fabric-api", client.mc)
+                            ?: throw IllegalStateException("Modrinth: нет fabric-api для ${client.mc}")
+                        val dst = java.io.File(modsDir, Installer.fileNameOf(url))
+                        Net.download(url, dst, null, cancel)
+                        Logx.i("fabric-api добавлен: ${dst.name}")
+                    } catch (e: Exception) {
+                        Logx.e("не удалось добавить fabric-api — клиент может не запуститься", e)
+                    }
+                }
+            }
+
             onState(PlayState.PreparingMobileProfile)
             onState(PlayState.PreparingRuntime)
 
