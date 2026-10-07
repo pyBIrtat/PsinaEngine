@@ -51,13 +51,15 @@ sealed class LaunchError(val title: String, val reason: String, val whatToDo: St
     )
     data class EngineVersionMissing(val mc: String) : LaunchError(
         "Версия не установлена",
-        "В Psina Engine нет установленной версии для Minecraft $mc",
-        "Нажми «Играть» ещё раз — недостающая ваниль установится перед запуском клиента"
+        "В Psina Engine нет целой версии для Minecraft $mc (база не установилась или повреждена)",
+        "Проверь интернет и нажми «Играть» — база доустановится автоматически. " +
+            "Если не помогает — «Переустановить клиента» на его карточке"
     )
     data class NativeLaunchFailed(val nativeReason: String?) : LaunchError(
         "Запуск не удался",
         nativeReason?.takeIf { it.isNotBlank() } ?: "Движок не смог стартовать Minecraft",
-        "Пришли текст этой ошибки и лог (кнопка в «Ещё»), найдём причину"
+        "Пришли текст этой ошибки и лог (кнопка ниже), найдём причину. " +
+            "Иногда помогает «Переустановить клиента» на его карточке"
     )
     data class DownloadFailed(val file: String, val cause: String) : LaunchError(
         "Файл не скачался", "$file: $cause", "Проверь интернет и нажми «Повторить»"
@@ -110,6 +112,6 @@ sealed class LaunchError(val title: String, val reason: String, val whatToDo: St
         "Нажми «Играть» — за счёт профиля с SHA-256 докачается только недостающее"
     )
     data class Unknown(val message: String) : LaunchError(
-        "Непонятная ошибка", message, "Подробности — в логе (Показать лог в «Ещё»), пришли его при репорте бага"
+        "Непонятная ошибка", message, "Подробности — в логе («Показать лог» ниже), пришли его при репорте бага"
     )
 }

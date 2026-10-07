@@ -1,6 +1,7 @@
 package ru.psina.core
 
 import android.content.Context
+import com.movtery.zalithlauncher.ui.screens.psina.PsinaAutoInstall
 
 /**
  * Полный пайплайн кнопки «Играть» — один объект, одно состояние за раз:
@@ -42,10 +43,16 @@ class PlayPipeline(private val ctx: Context) {
             val jarMissing = jarName != null &&
                 ProfileManager.installedPaths(clientId, client.mc)
                     .none { it == jarName || it.endsWith("/$jarName") }
-            if (!verify.needsReinstall && !jarMissing && Store.isInstalled(clientId)) {
+            // Полу-установка (клиент удалён/сорвался посреди установки): Store
+            // и профиль помечают клиента установленным, но ванильной базы нет —
+            // без этой проверки получаем вечный отказ запуска без пере-инсталла.
+            val ownMain = AndroidCompat.needsOwnMain(spec)
+            val baseMissing = !ZalithBackend.isBaseVersionValid(client.mc)
+            if (!verify.needsReinstall && !jarMissing && Store.isInstalled(clientId) && !baseMissing) {
                 Logx.i("профиль $clientId/${client.mc} уже проверен — установка не требуется")
             } else {
                 if (jarMissing) Logx.i("в манифесте новый файл клиента ($jarName) — обновляю профиль")
+                if (baseMissing) Logx.i("ванильная база psina-${client.mc} отсутствует/битая — восстановлю при установке")
                 val oldPaths = ProfileManager.installedPaths(clientId, client.mc)
                 onState(PlayState.Installing)
                 val result = Installer.install(client) { p ->
@@ -63,7 +70,7 @@ class PlayPipeline(private val ctx: Context) {
             // Родной запуск: этот APK сам является движком (Psina Engine, этап E3).
             onState(PlayState.LaunchingMinecraft("Psina Engine"))
             // β-порт клиентов со своим mainClass: их jar из корня инстанса.
-            val ownMainJar = if (AndroidCompat.needsOwnMain(spec) && client.jar.isNotBlank()) {
+            val ownMainJar = if (ownMain && client.jar.isNotBlank()) {
                 java.io.File(Paths.instanceDir(client.mc), Installer.fileNameOf(client.jar))
             } else null
             var nativeMissing: String? = null
@@ -78,7 +85,36 @@ class PlayPipeline(private val ctx: Context) {
                     onState(PlayState.LaunchRequestSent("Psina Engine"))
                     return
                 }
-                is ZalithBackend.NativeOutcome.VersionMissing -> nativeMissing = native.mc
+                is ZalithBackend.NativeOutcome.VersionMissing -> {
+                    // База пропала между проверкой и запуском (удалили версию,
+                    // cleanup антивируса и т.п.) — чиним на месте и пробуем ещё
+                    // раз, вместо тупика «нажми Играть ещё раз».
+                    nativeMissing = native.mc
+                    Logx.i("нативный запуск не нашёл базу ${native.mc} — пробую переустановить")
+                    ZalithBackend.cleanupBrokenVersions(client.mc)
+                    if (PsinaAutoInstall.repairVanillaBase(ctx, client.mc) &&
+                        ZalithBackend.awaitBaseVersionValid(client.mc)
+                    ) {
+                        val retry = ZalithBackend.nativeLaunch(
+                            ctx, client.mc, nickname, ramGb,
+                            spec.jvmArgs, spec.mainClass, clientId, ownMainJar
+                        )
+                        when (retry) {
+                            is ZalithBackend.NativeOutcome.RequestSent -> {
+                                onState(PlayState.LaunchRequestSent("Psina Engine"))
+                                return
+                            }
+                            is ZalithBackend.NativeOutcome.VersionMissing -> {
+                                Logx.e("после пере-установки база ${native.mc} всё ещё отсутствует")
+                            }
+                            is ZalithBackend.NativeOutcome.Failed -> {
+                                nativeMissing = null
+                                nativeFailure = retry.reason
+                                Logx.i("нативный запуск не удался (${retry.reason})")
+                            }
+                        }
+                    }
+                }
                 is ZalithBackend.NativeOutcome.Failed -> {
                     nativeFailure = native.reason
                     Logx.i("нативный запуск не удался (${native.reason})")

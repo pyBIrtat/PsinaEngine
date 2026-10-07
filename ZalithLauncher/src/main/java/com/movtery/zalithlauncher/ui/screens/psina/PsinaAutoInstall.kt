@@ -4,14 +4,22 @@ import android.content.Context
 import com.movtery.zalithlauncher.game.download.game.GameDownloadInfo
 import com.movtery.zalithlauncher.game.download.game.GameInstaller
 import com.movtery.zalithlauncher.game.version.installed.VersionsManager
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
 import ru.psina.core.Logx
 
 /**
- * Мост «играть в один тап»: если у форка ещё нет версии psina-<mc>,
- * доустанавливаем ванильную базу <mc> штатным GameInstaller форка
+ * Мост «играть в один тап»: если у форка ещё нет валидной версии psina-<mc>,
+ * ставим ванильную базу <mc> штатным GameInstaller форка
  * (customVersionName = psina-<mc>) — после чего экран сам перезапускает
  * pipeline и клиент доустанавливается поверх готовой базы.
+ *
+ * Также умеет ЛЕЧИТЬ полу-установку: если папка psina-<mc> осталась от
+ * сорванной установки (клиент удалён посреди установки и т.п.), её надо
+ * снести — иначе GameInstaller считает базу «уже установленной» и
+ * валидную версию так и не собирает.
  */
 object PsinaAutoInstall {
     const val TAG = "PsinaAutoInstall"
@@ -20,6 +28,33 @@ object PsinaAutoInstall {
     @Volatile
     var activeInstaller: GameInstaller? = null
         private set
+
+    /** Общий прогресс активной установки в %, -1 = неопределённый. */
+    @Volatile
+    var progressPercent: Int = -1
+        private set
+
+    /** Играется ли сейчас чинящий пере-инсталл (для UI поверх пайплайна). */
+    @Volatile
+    var repairing: Boolean = false
+        private set
+
+    private val progressWatchers =
+        mutableListOf<(Int) -> Unit>()
+
+    /** Подписка на прогресс (диалог). Возвращает функцию отписки. */
+    fun addProgressListener(l: (Int) -> Unit): () -> Unit =
+        synchronized(progressWatchers) {
+            progressWatchers.add(l)
+            { synchronized(progressWatchers) { progressWatchers.remove(l) } }
+        }
+
+    private fun reportProgress(pct: Int) {
+        progressPercent = pct
+        synchronized(progressWatchers) { progressWatchers.toList() }.forEach { w ->
+            runCatching { w(pct) }
+        }
+    }
 
     /**
      * Запуск установки ванильной базы psina-<mc> (вызывать из композиции:
@@ -64,6 +99,51 @@ object PsinaAutoInstall {
             }
         )
         return true
+    }
+
+    /**
+     * ЛЕЧИМ полу-установку: сносим битую папку psina-<mc> (и её производные
+     * psina-<mc>-<clientId>), затем БЛОКИРУЮЩЕ ставим ванильную базу заново.
+     * Вызывается из фонового потока пайплайна. Прогресс — в progressPercent
+     * и через addProgressListener (диалог поверх пайплайна).
+     *
+     * @return true — база валидна и можно запускать клиента заново.
+     */
+    fun repairVanillaBase(context: Context, mc: String): Boolean = try {
+        repairing = true
+        reportProgress(-1)
+        val deferred = CompletableDeferred<Boolean>()
+        // repair() зовут из worker-потока, а installGame выполняет задачи
+        // в переданном scope — берём независимый IO-scope и ждём результат.
+        val installScope = CoroutineScope(Dispatchers.IO)
+        val started = startVanillaInstall(context, mc, installScope) { ok, err ->
+            if (!ok) Logx.e("пере-установка ванили $mc не удалась: $err")
+            deferred.complete(ok)
+        }
+        if (!started) {
+            Logx.e("пере-установка ванили $mc не началась (уже идёт?)")
+            false
+        } else {
+            // Следим за задачами установщика: средний прогресс по запущенным.
+            val watcher = installScope.launch {
+                while (deferred.isActive) {
+                    val inst = activeInstaller
+                    val running = inst?.tasksFlow?.value
+                        ?.filter { it.task.stage.value == com.movtery.zalithlauncher.coroutine.TaskStage.RUNNING }
+                    if (running.isNullOrEmpty()) reportProgress(-1)
+                    else reportProgress(
+                        (running.maxOf { it.task.progress.value }.coerceAtLeast(0f) * 100).toInt()
+                    )
+                    kotlinx.coroutines.delay(200)
+                }
+            }
+            val ok = deferred.await()
+            watcher.cancel()
+            ok
+        }
+    } finally {
+        repairing = false
+        reportProgress(-1)
     }
 
     /** Отмена установки (кнопка в диалоге). */

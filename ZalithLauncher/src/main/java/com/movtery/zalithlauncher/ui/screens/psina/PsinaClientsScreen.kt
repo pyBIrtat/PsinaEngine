@@ -56,6 +56,7 @@ import kotlin.concurrent.thread
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.isActive
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import ru.psina.core.Logx
 import ru.psina.core.ManifestRepo
@@ -96,6 +97,16 @@ fun PsinaClientsScreen(
     var pipeline by remember { mutableStateOf<PlayPipeline?>(null) }
     var playState by remember { mutableStateOf<PlayState>(PlayState.Idle) }
 
+    // Переустановка конкретного клиента (снос пометки Store + обычный пайплайн).
+    var reinstallFor by remember { mutableStateOf<ManifestRepo.Client?>(null) }
+    // Чинящий пере-инсталл ванильной базы (лечение полу-установки).
+    var repairFor by remember { mutableStateOf<ManifestRepo.Client?>(null) }
+    var repairError by remember { mutableStateOf<String?>(null) }
+    // Тик-счётчик: перечитывать «установлен · N МБ» после установки/сноса.
+    var installedTick by remember { mutableIntStateOf(0) }
+    // Просмотр хвоста лога прямо из диалога ошибки.
+    var logText by remember { mutableStateOf<String?>(null) }
+
     // Авто-установка ванильной базы для «игры в один тап» на чистом телефоне.
     val scope = rememberCoroutineScope()
     var autoInstallFor by remember { mutableStateOf<String?>(null) }
@@ -135,6 +146,7 @@ fun PsinaClientsScreen(
             playState = st
             if (st is PlayState.LaunchRequestSent) {
                 Prefs.clientId = client.id
+                installedTick++
                 // Экспериментальные портативки могут запросить у игры права на
                 // SMS/звонки — один раз честно предупреждаем после запуска.
                 if (client.support == Support.EXPERIMENTAL && !Prefs.smsExplained) {
@@ -149,12 +161,29 @@ fun PsinaClientsScreen(
         thread(name = "psina-play-${client.id}") { p.run(client.id, Prefs.nickname, Prefs.ramGb) }
     }
 
+    // Переустановка: снимаем пометку «установлен» (при битой базе чиним и её),
+    // затем обычный пайплайн заново — он перекачает файлы и уберёт устаревшие.
+    fun reinstallClient(client: ManifestRepo.Client) {
+        scope.launch {
+            withContext(Dispatchers.IO) {
+                if (!ZalithBackend.isBaseVersionValid(client.mc)) {
+                    ZalithBackend.cleanupBrokenVersions(client.mc)
+                }
+                Store.uninstall(client.id, client.mc)
+            }
+            installedTick++
+            runPipeline(client)
+        }
+    }
+
     val startPlay: (ManifestRepo.Client) -> Unit = { client ->
         val mc = client.mc
-        // На чистом телефоне у форка нет версии psina-<mc>: сначала тихо
-        // ставим ванильную базу штатным установщиком форка (psina-<mc>),
-        // затем сразу продолжаем обычный пайплайн — в один тап для игрока.
-        if (ZalithBackend.findVersion(mc) == null && autoInstallFor == null) {
+        // База должна быть ЦЕЛОЙ (json+jar): битая полу-установка не считается —
+        // иначе запуск навсегда падает, а переустановка не начинается.
+        if (!ZalithBackend.isBaseVersionValid(mc) && autoInstallFor == null) {
+            // Недоделанную psina-базу сносим: иначе установщик ответит
+            // «уже установлено» и полу-версия останется навсегда.
+            if (ZalithBackend.hasBrokenBaseVersion(mc)) ZalithBackend.cleanupBrokenVersions(mc)
             autoInstallProgress = -1
             autoInstallFor = mc
             val started = PsinaAutoInstall.startVanillaInstall(context, mc, scope) { ok, err ->
@@ -273,11 +302,15 @@ fun PsinaClientsScreen(
                         items(shownClients) { client ->
                             PsinaClientCard(
                                 client = client,
-                                busy = autoInstallFor != null ||
+                                busy = autoInstallFor != null || repairFor != null ||
                                     playState !is PlayState.Idle &&
                                     playState !is PlayState.LaunchFailed &&
                                     playState !is PlayState.LaunchRequestSent,
-                                onPlay = { pendingClient = client }
+                                installed = remember(client.id, installedTick) {
+                                    Store.installedInfo(client.id)
+                                },
+                                onPlay = { pendingClient = client },
+                                onReinstall = { reinstallFor = client }
                             )
                         }
                     }
@@ -338,6 +371,90 @@ fun PsinaClientsScreen(
             text = { Text("Проверь интернет и попробуй ещё раз.\n\n$err") },
             confirmButton = {
                 TextButton(onClick = { autoInstallError = null }) { Text("Понятно") }
+            },
+            dismissButton = {
+                TextButton(onClick = { logText = Logx.tail(200) }) { Text("Показать лог") }
+            }
+        )
+    }
+
+    // Лечение полу-установки: клиент помечен установленным, но ванильная база
+    // битая/отсутствует. Чиним базу, затем обычный пайплайн докачивает клиента.
+    LaunchedEffect(repairFor) {
+        val client = repairFor ?: return@LaunchedEffect
+        val ok = withContext(Dispatchers.IO) {
+            PsinaAutoInstall.repairVanillaBase(context, client.mc)
+        }
+        repairFor = null
+        if (ok) runPipeline(client) else repairError = "Базу Minecraft ${client.mc} не удалось восстановить"
+    }
+
+    repairFor?.let { client ->
+        val progress = remember { mutableIntStateOf(PsinaAutoInstall.progressPercent) }
+        DisposableEffect(Unit) {
+            val unsub = PsinaAutoInstall.addProgressListener { progress.intValue = it }
+            onDispose { unsub() }
+        }
+        AlertDialog(
+            onDismissRequest = {},
+            title = { Text("Восстанавливаю Minecraft ${client.mc}") },
+            text = {
+                Column {
+                    Text(
+                        "Клиент «${client.name}» остался недоустановленным (файлы скачались, " +
+                            "а база Minecraft — нет). Сейчас починю базу и продолжу установку."
+                    )
+                    Spacer(Modifier.height(8.dp))
+                    if (progress.intValue >= 0) {
+                        LinearProgressIndicator(
+                            progress = { progress.intValue / 100f },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text("${progress.intValue}%")
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
+                }
+            },
+            confirmButton = {}
+        )
+    }
+
+    repairError?.let { err ->
+        AlertDialog(
+            onDismissRequest = { repairError = null },
+            title = { Text("Не удалось восстановить") },
+            text = { Text(err) },
+            confirmButton = {
+                TextButton(onClick = { repairError = null }) { Text("Понятно") }
+            },
+            dismissButton = {
+                TextButton(onClick = { logText = Logx.tail(200) }) { Text("Показать лог") }
+            }
+        )
+    }
+
+    // Подтверждение переустановки: сносим пометку «установлен» и качаем заново.
+    reinstallFor?.let { client ->
+        AlertDialog(
+            onDismissRequest = { reinstallFor = null },
+            title = { Text("Переустановить «${client.name}»?") },
+            text = {
+                Text(
+                    "Файлы клиента будут скачаны заново (до 300 МБ). Если проблема была " +
+                        "в битой установке — это её починит. База Minecraft $client.mc останется."
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val c = client
+                    reinstallFor = null
+                    reinstallClient(c)
+                }) { Text("Переустановить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { reinstallFor = null }) { Text("Отмена") }
             }
         )
     }
@@ -379,6 +496,33 @@ fun PsinaClientsScreen(
         )
     }
 
+    // Просмотр хвоста лога прямо из диалога ошибки.
+    logText?.let { tail ->
+        AlertDialog(
+            onDismissRequest = { logText = null },
+            title = { Text("Лог Псины (последние строки)") },
+            text = {
+                Text(
+                    tail.ifBlank { "Лог пуст" },
+                    style = MaterialTheme.typography.bodySmall
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    val send = android.content.Intent(android.content.Intent.ACTION_SEND)
+                    send.type = "text/plain"
+                    send.putExtra(android.content.Intent.EXTRA_TEXT, Logx.tail(400))
+                    context.startActivity(
+                        android.content.Intent.createChooser(send, "Отправить лог")
+                    )
+                }) { Text("Отправить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { logText = null }) { Text("Закрыть") }
+            }
+        )
+    }
+
     when (val st = playState) {
         is PlayState.Downloading -> AlertDialog(
             onDismissRequest = {},
@@ -404,7 +548,10 @@ fun PsinaClientsScreen(
             onDismissRequest = { playState = PlayState.Idle },
             title = { Text(st.error.title) },
             text = { Text("${st.error.reason}\n\n${st.error.whatToDo}") },
-            confirmButton = { TextButton(onClick = { playState = PlayState.Idle }) { Text("Понятно") } }
+            confirmButton = { TextButton(onClick = { playState = PlayState.Idle }) { Text("Понятно") } },
+            dismissButton = {
+                TextButton(onClick = { logText = Logx.tail(200) }) { Text("Показать лог") }
+            }
         )
 
         is PlayState.LaunchRequestSent -> AlertDialog(
@@ -432,7 +579,9 @@ private fun supportLabel(client: ManifestRepo.Client): String = when (client.sup
 private fun PsinaClientCard(
     client: ManifestRepo.Client,
     busy: Boolean,
-    onPlay: () -> Unit
+    installed: Store.Installed?,
+    onPlay: () -> Unit,
+    onReinstall: () -> Unit
 ) {
     Card(modifier = Modifier.fillMaxWidth()) {
         Row(
@@ -474,7 +623,11 @@ private fun PsinaClientCard(
                     overflow = TextOverflow.Ellipsis
                 )
                 Text(
-                    text = "Minecraft ${client.mc} · ${supportLabel(client)}",
+                    text = "Minecraft ${client.mc} · ${supportLabel(client)}" +
+                        (installed?.let {
+                            val mb = it.bytes / 1024 / 1024
+                            " · установлен" + (if (mb > 0) " · ${mb} МБ" else "")
+                        } ?: ""),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
@@ -497,12 +650,24 @@ private fun PsinaClientCard(
                     color = MaterialTheme.colorScheme.onSurfaceVariant
                 )
             } else {
-                Button(onClick = onPlay, enabled = !busy) {
-                    Icon(
-                        painter = painterResource(R.drawable.ic_play_arrow_filled),
-                        contentDescription = null
-                    )
-                    Text("Играть")
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Button(onClick = onPlay, enabled = !busy) {
+                        Icon(
+                            painter = painterResource(R.drawable.ic_play_arrow_filled),
+                            contentDescription = null
+                        )
+                        Text("Играть")
+                    }
+                    if (installed != null) {
+                        Text(
+                            text = "Переустановить",
+                            style = MaterialTheme.typography.labelMedium,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier
+                                .clickable(enabled = !busy) { onReinstall() }
+                                .padding(top = 4.dp)
+                        )
+                    }
                 }
             }
         }

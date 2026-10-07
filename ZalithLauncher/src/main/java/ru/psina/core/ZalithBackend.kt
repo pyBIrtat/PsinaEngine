@@ -3,6 +3,7 @@ package ru.psina.core
 import android.content.Context
 import com.movtery.zalithlauncher.game.account.Account
 import com.movtery.zalithlauncher.game.account.AccountType
+import com.movtery.zalithlauncher.game.path.getGameHome
 import com.movtery.zalithlauncher.game.version.installed.Version
 import com.movtery.zalithlauncher.game.version.installed.VersionFolders
 import com.movtery.zalithlauncher.game.version.installed.VersionsManager
@@ -43,9 +44,84 @@ object ZalithBackend {
     /** Имена версий-кандидатов для mc: psina-<mc>, затем само <mc>. */
     fun candidates(mc: String): List<String> = listOf("$VERSION_PREFIX$mc", mc)
 
-    fun findVersion(mc: String): Version? {
+    /** Производная версия ownMain-клиента: psina-<mc>-<clientId>. */
+    fun derivedVersionName(mc: String, clientId: String): String = "$VERSION_PREFIX$mc-$clientId"
+
+    /**
+     * Валидна ли базовая версия для mc: папка есть, json читается, jar на месте
+     * (или играется без него — некоторые версии только json). Битые
+     * полу-установленные папки без json/jar валидными НЕ считаются — иначе
+     * сломанная установка навсегда блокирует и авто-установку, и переустановку.
+     */
+    fun isBaseVersionValid(mc: String): Boolean {
+        val v = VersionsManager.versions.value.firstOrNull { it.getVersionName() == "$VERSION_PREFIX$mc" }
+            ?: return false
+        if (!v.isValid()) return false
+        val dir = v.getVersionPath()
+        val hasJson = File(dir, "${v.getVersionName()}.json").isFile
+        val hasJar = dir.listFiles { f -> f.extension.equals("jar", true) }?.isNotEmpty() == true
+        return hasJson && hasJar
+    }
+
+    /**
+     * Поиск версии для mc. По умолчанию требуем валидную версию (json+jar):
+     * полу-установленная папка версий клиента не запустит. Для инспекции
+     * (показать, что за мусор в versions/) можно вызвать с requireValid=false.
+     */
+    fun findVersion(mc: String, requireValid: Boolean = true): Version? {
         val names = candidates(mc).toSet()
-        return VersionsManager.versions.value.firstOrNull { it.getVersionName() in names }
+        return VersionsManager.versions.value.firstOrNull {
+            it.getVersionName() in names && (!requireValid || it.isValid())
+        }
+    }
+
+    /**
+     * После установки версии список VersionsManager наполняется асинхронно
+     * (refresh на Dispatchers.IO). Ждём появления ВАЛИДНОЙ psina-<mc> в этом
+     * списке — иначе проверки сразу после установки видят устаревший список
+     * и начинают чинить то, что уже починено. Вызывать из фонового потока.
+     */
+    fun awaitBaseVersionValid(mc: String, timeoutMs: Long = 20_000): Boolean {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (System.currentTimeMillis() < deadline) {
+            if (isBaseVersionValid(mc)) return true
+            Thread.sleep(100)
+        }
+        return isBaseVersionValid(mc)
+    }
+
+    /** Лежит ли в versions/ недоделанная/битая psina-версия (папка есть, игры из неё не будет). */
+    fun hasBrokenBaseVersion(mc: String): Boolean {
+        val name = "$VERSION_PREFIX$mc"
+        val dir = File(getGameHome(), "versions").let { File(it, name) }
+        if (!dir.isDirectory) return false
+        return !isBaseVersionValid(mc)
+    }
+
+    /**
+     * Снести битые psina-версии для mc: недоделанную базу psina-<mc> и
+     * производные psina-<mc>-* (их пересоберёт ensureCustomMainVersion).
+     * Нужен после срыва установки, когда папка осталась без json/jar —
+     * иначе GameInstaller считает версию «уже установленной».
+     */
+    fun cleanupBrokenVersions(mc: String) {
+        try {
+            val versionsDir = File(getGameHome(), "versions")
+            val baseDir = File(versionsDir, "$VERSION_PREFIX$mc")
+            if (baseDir.isDirectory && !isBaseVersionValid(mc)) {
+                baseDir.deleteRecursively()
+                Logx.i("снесена битая база ${baseDir.name}")
+            }
+            versionsDir.listFiles()?.forEach { d ->
+                if (d.isDirectory && d.name.startsWith("$VERSION_PREFIX$mc-")) {
+                    d.deleteRecursively()
+                    Logx.i("снесена производная ${d.name} (пересоберётся из ванили)")
+                }
+            }
+            VersionsManager.refresh("[PsinaCleanup]", null)
+        } catch (e: Exception) {
+            Logx.e("cleanup версий $mc не удался", e)
+        }
     }
 
     /**
@@ -87,15 +163,20 @@ object ZalithBackend {
         mainClass: String
     ): Version? {
         return try {
-            val base = findVersion(mc) ?: return null
-            val name = "psina-$mc-$clientId"
+            val base = findVersion(mc) ?: run {
+                Logx.i("ensureCustomMainVersion: валидной базы $VERSION_PREFIX$mc нет (полу-установка?)")
+                return null
+            }
+            val name = derivedVersionName(mc, clientId)
             val versionsDir = File(com.movtery.zalithlauncher.game.path.getGameHome(), "versions")
             val baseJson = File(File(versionsDir, base.getVersionName()), base.getVersionName() + ".json")
             if (!baseJson.isFile) return null
             val targetDir = File(versionsDir, name)
             targetDir.mkdirs()
             val jsonFile = File(targetDir, "$name.json")
-            if (!jsonFile.isFile) {
+            // Перезаписываем json всегда: битый/полу-записанный файл после сбоя
+            // иначе навсегда останется невалидной версией (самовосстановление).
+            run {
                 val obj = org.json.JSONObject(baseJson.readText())
                 obj.put("id", name)
                 obj.put("mainClass", mainClass)
@@ -110,7 +191,18 @@ object ZalithBackend {
                 }
             }
             VersionsManager.refresh("[PsinaCustomMain]", name)
-            VersionsManager.versions.value.firstOrNull { it.getVersionName() == name }
+            // Список версий наполняется асинхронно — дождаться, пока derived
+            // реально появится в нём, иначе вернём null и получим ложный
+            // VersionMissing (часть бага «полу-установки»).
+            var found: Version? = null
+            val deadline = System.currentTimeMillis() + 15_000
+            while (found == null && System.currentTimeMillis() < deadline) {
+                found = VersionsManager.versions.value.firstOrNull {
+                    it.getVersionName() == name && it.isValid()
+                }
+                if (found == null) Thread.sleep(100)
+            }
+            found
         } catch (e: Exception) {
             Logx.e("не удалось собрать версию со своим mainClass", e)
             null
