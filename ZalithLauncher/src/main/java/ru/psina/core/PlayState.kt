@@ -9,6 +9,11 @@ package ru.psina.core
  * нативном запуске этого APK.
  */
 sealed class PlayState {
+    companion object {
+        /** Текст шага «достраиваем Fabric-лоадер в базу» — по нему UI прячет кнопку «Отменить» (отменять нечего). */
+        const val FABRIC_UPGRADE_STEP: String = "Добавляю Fabric-лоадер"
+    }
+
     object Idle : PlayState()
     object LoadingManifest : PlayState()
     object CheckingPhoneStorage : PlayState()
@@ -19,7 +24,10 @@ sealed class PlayState {
         val doneBytes: Long,
         val totalBytes: Long,
         val percent: Int
-    ) : PlayState()
+    ) : PlayState() {
+        /** Шаг достройки Fabric (не скачивание файла) — отмены у него нет. */
+        val isFabricUpgrade: Boolean get() = file == FABRIC_UPGRADE_STEP
+    }
     object Verifying : PlayState()
     object Installing : PlayState()
     object PreparingMobileProfile : PlayState()

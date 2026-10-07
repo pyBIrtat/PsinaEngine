@@ -67,6 +67,25 @@ class PlayPipeline(private val ctx: Context) {
             onState(PlayState.PreparingMobileProfile)
             onState(PlayState.PreparingRuntime)
 
+            // Базы, поставленные старыми версиями лаунчера, ванильные — без Fabric-
+            // лоадера моды из mods/ не грузятся (молча). Достраиваем Fabric один раз.
+            if (!ZalithBackend.baseHasFabric(client.mc)) {
+                onState(PlayState.Downloading(PlayState.FABRIC_UPGRADE_STEP, 0, 0, -1))
+                Logx.i("база psina-${client.mc} без Fabric — достраиваю лоадер")
+                // Прогресс достройки (внутри свой watcher) — в наш диалог состояния.
+                val unsub = PsinaAutoInstall.addProgressListener { pct ->
+                    onState(PlayState.Downloading(PlayState.FABRIC_UPGRADE_STEP, 0, 0, pct.coerceAtLeast(0)))
+                }
+                val ok = try {
+                    PsinaAutoInstall.upgradeBaseWithFabric(ctx, client.mc)
+                } finally {
+                    unsub()
+                }
+                if (!ok) {
+                    Logx.e("достройка Fabric в psina-${client.mc} не удалась — играем как есть")
+                }
+            }
+
             // Родной запуск: этот APK сам является движком (Psina Engine, этап E3).
             onState(PlayState.LaunchingMinecraft("Psina Engine"))
             // β-порт клиентов со своим mainClass: их jar из корня инстанса.

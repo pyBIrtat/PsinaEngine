@@ -339,8 +339,8 @@ fun PsinaClientsScreen(
             text = {
                 Column {
                     Text(
-                        "Первый запуск: скачиваю ванильную базу $mc. " +
-                            "Это нужно один раз — дальше клиент встанет поверх и запуск станет быстрым."
+                        "Первый запуск: скачиваю Minecraft $mc с Fabric-лоадером. " +
+                            "Это нужно один раз — Fabric загружает моды клиента."
                     )
                     Spacer(Modifier.height(8.dp))
                     if (autoInstallProgress >= 0) {
@@ -531,16 +531,24 @@ fun PsinaClientsScreen(
                 Column {
                     Text(st.file, maxLines = 1, overflow = TextOverflow.Ellipsis)
                     Spacer(Modifier.height(8.dp))
-                    LinearProgressIndicator(
-                        progress = { st.percent / 100f },
-                        modifier = Modifier.fillMaxWidth()
-                    )
-                    Spacer(Modifier.height(4.dp))
-                    Text("${st.percent}%")
+                    if (st.percent >= 0) {
+                        LinearProgressIndicator(
+                            progress = { st.percent / 100f },
+                            modifier = Modifier.fillMaxWidth()
+                        )
+                        Spacer(Modifier.height(4.dp))
+                        Text("${st.percent}%")
+                    } else {
+                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    }
                 }
             },
             confirmButton = {
-                TextButton(onClick = { pipeline?.cancelDownload() }) { Text("Отменить") }
+                // Во время достройки Fabric отменять нечего (это не загрузка
+                // по нашему токену) — не показываем пустую кнопку.
+                if (!st.isFabricUpgrade) {
+                    TextButton(onClick = { pipeline?.cancelDownload() }) { Text("Отменить") }
+                }
             }
         )
 

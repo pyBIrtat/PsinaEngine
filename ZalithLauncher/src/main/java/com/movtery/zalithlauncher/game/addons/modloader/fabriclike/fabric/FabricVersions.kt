@@ -40,4 +40,14 @@ object FabricVersions : FabricLikeVersions(
             )
         }
     }
+
+    /**
+     * Psina fork: последняя стабильная Fabric-версия для указанного Minecraft.
+     * Возвращает null, если список загрузить не удалось или подходящей версии
+     * нет — вызывающий код должен уметь работать без лоадера.
+     */
+    suspend fun fabricFor(mcVersion: String): FabricVersion? =
+        fetchFabricLoaderList(mcVersion)
+            ?.firstOrNull { it.stable }
+            ?: fetchFabricLoaderList(mcVersion)?.firstOrNull()
 }

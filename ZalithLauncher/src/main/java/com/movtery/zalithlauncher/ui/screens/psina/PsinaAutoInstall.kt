@@ -1,6 +1,7 @@
 package com.movtery.zalithlauncher.ui.screens.psina
 
 import android.content.Context
+import com.movtery.zalithlauncher.game.addons.modloader.fabriclike.fabric.FabricVersions
 import com.movtery.zalithlauncher.game.download.game.GameDownloadInfo
 import com.movtery.zalithlauncher.game.download.game.GameInstaller
 import com.movtery.zalithlauncher.game.version.installed.VersionsManager
@@ -34,6 +35,14 @@ object PsinaAutoInstall {
     var progressPercent: Int = -1
         private set
 
+    /** Установка запрошена, но ещё не стартовала (фетч списка Fabric). */
+    @Volatile
+    private var pendingStart: Boolean = false
+
+    /** Отмена ДО старта (пока список Fabric ещё грузится). */
+    @Volatile
+    private var startCancelled: Boolean = false
+
     /** Играется ли сейчас чинящий пере-инсталл (для UI поверх пайплайна). */
     @Volatile
     var repairing: Boolean = false
@@ -59,8 +68,12 @@ object PsinaAutoInstall {
     }
 
     /**
-     * Запуск установки ванильной базы psina-<mc> (вызывать из композиции:
-     * GameInstaller исполняет задачи в переданном scope).
+     * Запуск установки базы psina-<mc> с Fabric-лоадером (вызывать из
+     * композиции: GameInstaller исполняет задачи в переданном scope).
+     *
+     * Fabric нужен НЕ для галочки: Fabric-клиенты Псины кладутся в mods/, а
+     * моды из mods/ загружает только Fabric-лоадер (net.fabricmc:fabric-loader
+     * в libraries json версии). Ванильная база молча игнорировала все моды.
      * @return false, если начать не удалось (установка уже идёт).
      */
     fun startVanillaInstall(
@@ -69,37 +82,57 @@ object PsinaAutoInstall {
         scope: CoroutineScope,
         onResult: (ok: Boolean, error: String?) -> Unit
     ): Boolean {
-        if (activeInstaller != null) return false
+        if (activeInstaller != null || pendingStart) return false
         val name = "psina-$mc"
-        Logx.i("auto-install vanilla base: $name")
-        val installer = GameInstaller(
-            context = context,
-            info = GameDownloadInfo(
-                gameVersion = mc,
-                customVersionName = name
-            ),
-            scope = scope
-        )
-        activeInstaller = installer
-        installer.installGame(
-            onInstalled = {
-                Logx.i("vanilla base installed: $name")
-                VersionsManager.refresh("[$TAG]", name)
-                activeInstaller = null
-                onResult(true, null)
-            },
-            onError = { th ->
-                Logx.e("auto-install failed: $name", th)
-                activeInstaller = null
-                onResult(false, th.message ?: th.toString())
-            },
-            onGameAlreadyInstalled = {
-                Logx.i("vanilla base already installed: $name")
-                VersionsManager.refresh("[$TAG]", name)
-                activeInstaller = null
-                onResult(true, null)
+        Logx.i("auto-install base with fabric: $name")
+        pendingStart = true
+        startCancelled = false
+        // Список Fabric-версий грузим внутри scope (сеть с main-потока запрещена),
+        // затем обычная установка. installGame сам асинхронный.
+        scope.launch {
+            val fabric = runCatching { FabricVersions.fabricFor(mc) }
+                .onFailure { Logx.e("список Fabric не получен — ставим ваниль", it) }
+                .getOrNull()
+            if (startCancelled) {
+                Logx.i("установка $name отменена до старта")
+                pendingStart = false
+                // Обязательно сообщаем результат: ждущий repairVanillaBase
+                // иначе зависнет навсегда на deferred.await().
+                onResult(false, "Установка отменена")
+                return@launch
             }
-        )
+            Logx.i("fabric для $mc: ${fabric?.version ?: "нет (ванильная база)"}")
+            val installer = GameInstaller(
+                context = context,
+                info = GameDownloadInfo(
+                    gameVersion = mc,
+                    customVersionName = name,
+                    fabric = fabric
+                ),
+                scope = scope
+            )
+            pendingStart = false
+            activeInstaller = installer
+            installer.installGame(
+                onInstalled = {
+                    Logx.i("база установлена: $name")
+                    VersionsManager.refresh("[$TAG]", name)
+                    activeInstaller = null
+                    onResult(true, null)
+                },
+                onError = { th ->
+                    Logx.e("auto-install failed: $name", th)
+                    activeInstaller = null
+                    onResult(false, th.message ?: th.toString())
+                },
+                onGameAlreadyInstalled = {
+                    Logx.i("vanilla base already installed: $name")
+                    VersionsManager.refresh("[$TAG]", name)
+                    activeInstaller = null
+                    onResult(true, null)
+                }
+            )
+        }
         return true
     }
 
@@ -153,7 +186,78 @@ object PsinaAutoInstall {
 
     /** Отмена установки (кнопка в диалоге). */
     fun cancel() {
+        startCancelled = true
         activeInstaller?.cancelInstall()
         activeInstaller = null
+    }
+
+    /**
+     * Достроить Fabric-лоадер в УЖЕ установленную ванильную базу psina-<mc>
+     * (версии выпущены до того, как база стала ставиться с Fabric).
+     * Штатный modifyVersion: ваниль перекачивается во временные папки,
+     * json пересобирается с net.fabricmc:fabric-loader в libraries, затем
+     * заменяются ТОЛЬКО json/jar версии — mods/ и сохранения не трогаются.
+     * Блокирующе: вызывать из фонового потока.
+     * @return true — в базе теперь есть Fabric-лоадер (или он уже был).
+     */
+    fun upgradeBaseWithFabric(context: Context, mc: String): Boolean = try {
+        val name = "psina-$mc"
+        Logx.i("достраиваю Fabric-лоадер в базу $name")
+        repairing = true
+        reportProgress(-1)
+        val deferred = CompletableDeferred<Boolean>()
+        // Вызов из рабочего потока пайплайна — здесь блокировка допустима.
+        val fabric = kotlinx.coroutines.runBlocking {
+            runCatching { FabricVersions.fabricFor(mc) }
+                .onFailure { Logx.e("список Fabric не получен — пропуск достройки", it) }
+                .getOrNull()
+        }
+        if (fabric == null) {
+            repairing = false
+            reportProgress(-1)
+            return false
+        }
+        val installer = GameInstaller(
+            context = context,
+            info = GameDownloadInfo(
+                gameVersion = mc,
+                customVersionName = name,
+                fabric = fabric
+            ),
+            scope = CoroutineScope(Dispatchers.IO)
+        )
+        installer.modifyVersion(
+            onModified = {
+                Logx.i("Fabric-лоадер добавлен в $name")
+                VersionsManager.refresh("[$TAG]", name)
+                deferred.complete(true)
+            },
+            onError = { th ->
+                Logx.e("достройка Fabric не удалась: $name", th)
+                deferred.complete(false)
+            }
+        )
+        kotlinx.coroutines.runBlocking {
+            val watcher = CoroutineScope(Dispatchers.IO).launch {
+                while (deferred.isActive) {
+                    val running = installer.tasksFlow.value
+                        .filter { it.task.stage.value == com.movtery.zalithlauncher.coroutine.TaskStage.RUNNING }
+                    if (running.isNullOrEmpty()) reportProgress(-1)
+                    else reportProgress(
+                        (running.maxOf { it.task.progress.value }.coerceAtLeast(0f) * 100).toInt()
+                    )
+                    kotlinx.coroutines.delay(200)
+                }
+            }
+            val ok = deferred.await()
+            watcher.cancel()
+            ok
+        }
+    } catch (e: Exception) {
+        Logx.e("достройка Fabric в $mc упала", e)
+        false
+    } finally {
+        repairing = false
+        reportProgress(-1)
     }
 }

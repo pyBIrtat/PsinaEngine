@@ -7,6 +7,7 @@ import com.movtery.zalithlauncher.game.path.getGameHome
 import com.movtery.zalithlauncher.game.version.installed.Version
 import com.movtery.zalithlauncher.game.version.installed.VersionFolders
 import com.movtery.zalithlauncher.game.version.installed.VersionsManager
+import com.movtery.zalithlauncher.game.version.installed.utils.VersionInfoUtils
 import com.movtery.zalithlauncher.ui.activities.runGame
 import java.io.File
 
@@ -76,6 +77,23 @@ object ZalithBackend {
     }
 
     /**
+     * Есть ли в json psina-базы Fabric-лоадер (net.fabricmc:fabric-loader).
+     * Именно лоадер загружает моды из mods/: ванильный json молча их игнорирует,
+     * хотя менеджер модов показывает файлы — из-за этого и появлялось
+     * «Для текущей версии нет мод-лоадера, моды использовать нельзя».
+     */
+    fun baseHasFabric(mc: String): Boolean = try {
+        val base = findVersion(mc) ?: return false
+        val json = File(base.getVersionPath(), "${base.getVersionName()}.json")
+        if (!json.isFile) return false
+        VersionInfoUtils.parseJsonToVersionInfo(json)
+            ?.hasLoader(com.movtery.zalithlauncher.game.addons.modloader.ModLoader.FABRIC) == true
+    } catch (e: Exception) {
+        Logx.e("не удалось определить лоадер базы psina-$mc", e)
+        false
+    }
+
+    /**
      * После установки версии список VersionsManager наполняется асинхронно
      * (refresh на Dispatchers.IO). Ждём появления ВАЛИДНОЙ psina-<mc> в этом
      * списке — иначе проверки сразу после установки видят устаревший список
@@ -129,13 +147,23 @@ object ZalithBackend {
      * Источник — Paths.modsDir(mc) (туда всё поставил Installer), приёмник —
      * VersionFolders.MOD.getDir(version.getGameDir()). Копируем только jar'ы,
      * перезаписывая при несовпадении размера/времени.
+     *
+     * Чистка устаревших модов — ТОЛЬКО свои: в корне mods-папки версии лежит
+     * маркер .psina-sync.json со списком модов, которые мы туда когда-либо
+     * копировали. Удаляем только jar'ы из маркера, которых больше нет в
+     * инстансе. Пользовательские моды, добавленные вручную/через менеджер
+     * модов, никогда не трогаем.
      */
-    fun syncMods(mc: String, version: Version): Int {
+    fun syncMods(mc: String, version: Version, clientId: String = ""): Int {
         val src = Paths.modsDir(mc)
         if (!src.isDirectory) return 0
         val dst = VersionFolders.MOD.getDir(version.getGameDir())
         dst.mkdirs()
+        val markerFile = File(dst, SYNC_MARKER)
+        val prevSynced = readSyncMarker(markerFile)
+
         var n = 0
+        val copiedNow = mutableSetOf<String>()
         src.walkTopDown()
             .filter { it.isFile && it.name.endsWith(".jar", true) }
             .forEach { f ->
@@ -143,10 +171,46 @@ object ZalithBackend {
                 if (!out.exists() || out.length() != f.length() || out.lastModified() < f.lastModified()) {
                     f.copyTo(out, overwrite = true)
                 }
+                copiedNow.add(f.name)
                 n++
             }
+
+        // Устаревшие СВОИ моды: скопированы нами раньше (в маркере), но в
+        // инстансе их уже нет — например, после переустановки на новую сборку.
+        (prevSynced - copiedNow).forEach { name ->
+            val f = File(dst, name)
+            if (f.isFile) {
+                f.delete()
+                Logx.i("syncMods: удалён устаревший мод $name")
+            }
+        }
+        if (prevSynced != copiedNow) writeSyncMarker(markerFile, copiedNow)
+
         Logx.i("syncMods: $n jar'ов из ${src.path} -> ${dst.path}")
         return n
+    }
+
+    private const val SYNC_MARKER = ".psina-sync.json"
+
+    private fun readSyncMarker(f: File): Set<String> = try {
+        if (!f.isFile) emptySet()
+        else {
+            val arr = org.json.JSONArray(f.readText())
+            (0 until arr.length()).map { arr.getString(it) }.toSet()
+        }
+    } catch (e: Exception) {
+        Logx.e("маркер syncMods битый", e)
+        emptySet()
+    }
+
+    private fun writeSyncMarker(f: File, names: Set<String>) {
+        try {
+            val arr = org.json.JSONArray()
+            names.sorted().forEach { arr.put(it) }
+            f.writeText(arr.toString())
+        } catch (e: Exception) {
+            Logx.e("не удалось записать маркер syncMods", e)
+        }
     }
 
     /**
@@ -180,6 +244,10 @@ object ZalithBackend {
                 val obj = org.json.JSONObject(baseJson.readText())
                 obj.put("id", name)
                 obj.put("mainClass", mainClass)
+                // launchFor описывает состав БАЗОВОЙ версии; производная версия —
+                // своя сборка со своим mainClass, чужой launchFor вводит в
+                // заблуждение определитель лоадера (RevisionInfo) — убираем.
+                obj.remove("launchFor")
                 jsonFile.writeText(obj.toString())
                 Logx.i("своя версия собрана: $name (mainClass=$mainClass)")
             }
@@ -188,6 +256,19 @@ object ZalithBackend {
                 if (!dst.exists() || dst.length() != clientJar.length()) {
                     clientJar.copyTo(dst, overwrite = true)
                     Logx.i("version-jar подменён на клиентский: ${dst.name}")
+                }
+                // ownMain-клиент живёт в version-jar со своим mainClass — его
+                // НЕЛЬЗЯ грузить ещё раз как мод из mods/ (двойной класспатч,
+                // гарантированный конфликт). Убираем его из модов версии.
+                val versionMods = VersionFolders.MOD.getDir(
+                    File(File(getGameHome(), "versions"), name)
+                )
+                if (versionMods.isDirectory) {
+                    versionMods.listFiles { f -> f.isFile && f.name == clientJar.name }
+                        ?.forEach { stale ->
+                            stale.delete()
+                            Logx.i("убран клиентский jar из модов версии: ${stale.name}")
+                        }
                 }
             }
             VersionsManager.refresh("[PsinaCustomMain]", name)
@@ -231,7 +312,7 @@ object ZalithBackend {
             } else {
                 findVersion(mc) ?: return NativeOutcome.VersionMissing(mc)
             }
-            syncMods(mc, version)
+            syncMods(mc, version, clientId)
             applyRam(version, ramGb)
             applyJvmArgs(version, extraJvmArgs)
             // Локальный офлайн-профиль — как LOCAL-аккаунты форка (accessToken "0").
