@@ -6,8 +6,8 @@ import com.movtery.zalithlauncher.game.account.AccountType
 import com.movtery.zalithlauncher.game.path.getGameHome
 import com.movtery.zalithlauncher.game.version.installed.Version
 import com.movtery.zalithlauncher.game.version.installed.VersionFolders
+import com.movtery.zalithlauncher.game.addons.modloader.ModLoader
 import com.movtery.zalithlauncher.game.version.installed.VersionsManager
-import com.movtery.zalithlauncher.game.version.installed.utils.VersionInfoUtils
 import com.movtery.zalithlauncher.ui.activities.runGame
 import java.io.File
 
@@ -83,11 +83,7 @@ object ZalithBackend {
      * «Для текущей версии нет мод-лоадера, моды использовать нельзя».
      */
     fun baseHasFabric(mc: String): Boolean = try {
-        val base = findVersion(mc) ?: return false
-        val json = File(base.getVersionPath(), "${base.getVersionName()}.json")
-        if (!json.isFile) return false
-        VersionInfoUtils.parseJsonToVersionInfo(json)
-            ?.hasLoader(com.movtery.zalithlauncher.game.addons.modloader.ModLoader.FABRIC) == true
+        findVersion(mc)?.getVersionInfo()?.hasLoader(ModLoader.FABRIC) == true
     } catch (e: Exception) {
         Logx.e("не удалось определить лоадер базы psina-$mc", e)
         false
