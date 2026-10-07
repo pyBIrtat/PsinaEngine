@@ -43,11 +43,13 @@ object PsinaAutoInstall {
         mutableListOf<(Int) -> Unit>()
 
     /** Подписка на прогресс (диалог). Возвращает функцию отписки. */
-    fun addProgressListener(l: (Int) -> Unit): () -> Unit =
-        synchronized(progressWatchers) {
-            progressWatchers.add(l)
-            { synchronized(progressWatchers) { progressWatchers.remove(l) } }
+    fun addProgressListener(l: (Int) -> Unit): () -> Unit {
+        synchronized(progressWatchers) { progressWatchers.add(l) }
+        return {
+            synchronized(progressWatchers) { progressWatchers.remove(l) }
+            Unit
         }
+    }
 
     private fun reportProgress(pct: Int) {
         progressPercent = pct
@@ -124,22 +126,25 @@ object PsinaAutoInstall {
             Logx.e("пере-установка ванили $mc не началась (уже идёт?)")
             false
         } else {
-            // Следим за задачами установщика: средний прогресс по запущенным.
-            val watcher = installScope.launch {
-                while (deferred.isActive) {
-                    val inst = activeInstaller
-                    val running = inst?.tasksFlow?.value
-                        ?.filter { it.task.stage.value == com.movtery.zalithlauncher.coroutine.TaskStage.RUNNING }
-                    if (running.isNullOrEmpty()) reportProgress(-1)
-                    else reportProgress(
-                        (running.maxOf { it.task.progress.value }.coerceAtLeast(0f) * 100).toInt()
-                    )
-                    kotlinx.coroutines.delay(200)
+            // Вызов из worker-потока (пайплайн/IO), блокировка допустима.
+            kotlinx.coroutines.runBlocking {
+                // Следим за задачами установщика: средний прогресс по запущенным.
+                val watcher = installScope.launch {
+                    while (deferred.isActive) {
+                        val inst = activeInstaller
+                        val running = inst?.tasksFlow?.value
+                            ?.filter { it.task.stage.value == com.movtery.zalithlauncher.coroutine.TaskStage.RUNNING }
+                        if (running.isNullOrEmpty()) reportProgress(-1)
+                        else reportProgress(
+                            (running.maxOf { it.task.progress.value }.coerceAtLeast(0f) * 100).toInt()
+                        )
+                        kotlinx.coroutines.delay(200)
+                    }
                 }
+                val ok = deferred.await()
+                watcher.cancel()
+                ok
             }
-            val ok = deferred.await()
-            watcher.cancel()
-            ok
         }
     } finally {
         repairing = false
