@@ -54,9 +54,9 @@ sealed class LaunchError(val title: String, val reason: String, val whatToDo: St
         "В Psina Engine нет установленной версии для Minecraft $mc",
         "Нажми «Играть» ещё раз — недостающая ваниль установится перед запуском клиента"
     )
-    data class NativeLaunchFailed(val reason: String?) : LaunchError(
+    data class NativeLaunchFailed(val nativeReason: String?) : LaunchError(
         "Запуск не удался",
-        reason?.takeIf { it.isNotBlank() } ?: "Движок не смог стартовать Minecraft",
+        nativeReason?.takeIf { it.isNotBlank() } ?: "Движок не смог стартовать Minecraft",
         "Пришли текст этой ошибки и лог (кнопка в «Ещё»), найдём причину"
     )
     data class DownloadFailed(val file: String, val cause: String) : LaunchError(
