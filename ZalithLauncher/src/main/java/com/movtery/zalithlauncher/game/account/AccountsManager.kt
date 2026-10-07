@@ -25,10 +25,8 @@ import com.movtery.zalithlauncher.coroutine.TaskSystem
 import com.movtery.zalithlauncher.database.AppDatabase
 import com.movtery.zalithlauncher.game.account.auth_server.data.AuthServer
 import com.movtery.zalithlauncher.game.account.auth_server.data.AuthServerDao
-import com.movtery.zalithlauncher.path.PathManager
 import com.movtery.zalithlauncher.setting.AllSettings
 import com.movtery.zalithlauncher.ui.androidText
-import com.movtery.zalithlauncher.utils.isInGreaterChina
 import com.movtery.zalithlauncher.utils.logging.Logger
 import com.movtery.zalithlauncher.utils.network.isNetworkAvailable
 import kotlinx.coroutines.CoroutineScope
@@ -38,7 +36,6 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import org.apache.commons.io.FileUtils
-import java.io.File
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.CopyOnWriteArrayList
 
@@ -246,10 +243,7 @@ object AccountsManager {
         _isOffline.update { isOffline }
     }
 
-    private fun checkLimit(): Boolean {
-        val circumventLimit = File(PathManager.DIR_FILES_EXTERNAL, "circumventLimit")
-        return !circumventLimit.exists() && !isInGreaterChina() && !hasMicrosoftAccount()
-    }
+    private fun checkLimit(): Boolean = false
 
     /**
      * 保存账号到数据库

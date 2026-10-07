@@ -442,21 +442,24 @@ fun LoginMenuDialog(
                                 .padding(start = 12.dp, end = 6.dp),
                             verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            //微软登录
-                            LoginItem(
-                                modifier = Modifier.fillMaxWidth(),
-                                title = stringResource(R.string.account_type_microsoft),
-                                onClick = {
-                                    onMicrosoftLogin()
-                                    onDismissRequest()
-                                }
-                            )
+                            //Psina fork: оффлайн-аккаунт (любой ник) — основной способ входа,
+                            //Microsoft — дополнительный. Порядок элементов изменён,
+                            //оффлайн идёт первым.
                             //离线登录
                             LoginItem(
                                 modifier = Modifier.fillMaxWidth(),
                                 title = stringResource(R.string.account_type_local),
                                 onClick = {
                                     onLocalLogin()
+                                    onDismissRequest()
+                                }
+                            )
+                            //微软登录
+                            LoginItem(
+                                modifier = Modifier.fillMaxWidth(),
+                                title = stringResource(R.string.account_type_microsoft),
+                                onClick = {
+                                    onMicrosoftLogin()
                                     onDismissRequest()
                                 }
                             )

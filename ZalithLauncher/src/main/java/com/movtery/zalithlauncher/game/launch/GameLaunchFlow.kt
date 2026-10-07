@@ -26,6 +26,7 @@ import com.movtery.zalithlauncher.coroutine.TitledTask
 import com.movtery.zalithlauncher.coroutine.addTask
 import com.movtery.zalithlauncher.coroutine.buildPhase
 import com.movtery.zalithlauncher.game.account.Account
+import com.movtery.zalithlauncher.game.account.AccountType
 import com.movtery.zalithlauncher.game.account.AccountsManager
 import com.movtery.zalithlauncher.game.account.auth_server.AuthServerHelper
 import com.movtery.zalithlauncher.game.account.isLocalAccount
@@ -98,7 +99,17 @@ class GameLaunchFlow(scope: CoroutineScope) {
             return
         }
 
-        val account = AccountsManager.currentAccountFlow.value ?: return
+        //Psina fork: аккаунтов нет — играем по-прежнему нельзя без аккаунта,
+        //но вместо молчаливого return создаём оффлайн-аккаунт с ником из
+        //настроек Псины (крайний фолбэк: UI уже должен был это сделать).
+        val account = AccountsManager.currentAccountFlow.value ?: run {
+            val nick = ru.psina.core.Prefs.nickname.trim().ifBlank { "Player" }
+            val fallback = Account(username = nick, accountType = AccountType.LOCAL.tag)
+            val created = runCatching {
+                kotlinx.coroutines.runBlocking { AccountsManager.suspendSaveAccount(fallback) }
+            }.getOrDefault(fallback)
+            created
+        }
 
         taskExecutor.executePhasesAsync(
             onStart = {

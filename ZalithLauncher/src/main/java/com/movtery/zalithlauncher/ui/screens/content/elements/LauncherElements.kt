@@ -71,6 +71,8 @@ import com.movtery.zalithlauncher.game.account.AccountsManager
 import com.movtery.zalithlauncher.game.account.accountErrorText
 import com.movtery.zalithlauncher.game.account.auth_server.AuthServerHelper
 import com.movtery.zalithlauncher.game.account.isMicrosoftAccount
+import com.movtery.zalithlauncher.game.account.isLocalAccount
+import com.movtery.zalithlauncher.game.account.localLogin
 import com.movtery.zalithlauncher.game.account.microsoftLogin
 import com.movtery.zalithlauncher.game.plugin.ApkPlugin
 import com.movtery.zalithlauncher.game.plugin.natives.NativePluginManager
@@ -92,7 +94,7 @@ import com.movtery.zalithlauncher.ui.components.PositionFilledTonalButton
 import com.movtery.zalithlauncher.ui.components.SimpleAlertDialog
 import com.movtery.zalithlauncher.ui.components.VideoPlayer
 import com.movtery.zalithlauncher.ui.components.rememberDialogMaxHeight
-import com.movtery.zalithlauncher.ui.screens.content.FirstLoginMenu
+import com.movtery.zalithlauncher.ui.screens.content.FirstLoginMenu // (сохранено для сигнатуры; Psina больше не гонит юзера в Microsoft)
 import com.movtery.zalithlauncher.ui.theme.cardColor
 import com.movtery.zalithlauncher.ui.theme.onCardColor
 import com.movtery.zalithlauncher.utils.canHandlePermission
@@ -222,13 +224,16 @@ fun LaunchGameOperation(
         }
         is LaunchGameOperation.NoAccount -> {
             LaunchedEffect(Unit) {
-                eventViewModel.sendToast(androidText(R.string.game_launch_no_account))
-                val isOffline = AccountsManager.isOffline.value
-                toAccountManageScreen(
-                    if (isOffline) FirstLoginMenu.MICROSOFT
-                    else FirstLoginMenu.NORMAL
-                )
-                launchGameViewModel.updateOperation(LaunchGameOperation.None)
+                //Psina fork: аккаунтов нет — молча создаём оффлайн-аккаунт с ником
+                //из настроек Псины и продолжаем запуск. Microsoft-вход остаётся
+                //доступен вручную с экрана «Учётная запись» (оффлайн первый в меню).
+                val nick = ru.psina.core.Prefs.nickname.trim().ifBlank { "Player" }
+                localLogin(nick, null)
+                AccountsManager.currentAccountFlow.value ?: run {
+                    val acc = AccountsManager.accountsFlow.value.firstOrNull { it.isLocalAccount() && it.username == nick }
+                    acc?.let(AccountsManager::setCurrentAccount)
+                }
+                launchGameViewModel.updateOperation(LaunchGameOperation.RealLaunch(operation.version, operation.quickPlay, skipAccountRefresh = true))
             }
         }
         is LaunchGameOperation.RendererNoStoragePermission -> {

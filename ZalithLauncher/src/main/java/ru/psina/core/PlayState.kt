@@ -50,9 +50,14 @@ sealed class LaunchError(val title: String, val reason: String, val whatToDo: St
         "Версия не найдена", "В манифесте нет версии Minecraft $mc", "Выбери другую версию из списка"
     )
     data class EngineVersionMissing(val mc: String) : LaunchError(
-        "Версия не установлена в движке",
+        "Версия не установлена",
         "В Psina Engine нет установленной версии для Minecraft $mc",
-        "Установи Minecraft $mc в лаунчере, либо поставь внешний движок с этой версией"
+        "Нажми «Играть» ещё раз — недостающая ваниль установится перед запуском клиента"
+    )
+    data class NativeLaunchFailed(val reason: String?) : LaunchError(
+        "Запуск не удался",
+        reason?.takeIf { it.isNotBlank() } ?: "Движок не смог стартовать Minecraft",
+        "Пришли текст этой ошибки и лог (кнопка в «Ещё»), найдём причину"
     )
     data class DownloadFailed(val file: String, val cause: String) : LaunchError(
         "Файл не скачался", "$file: $cause", "Проверь интернет и нажми «Повторить»"
@@ -86,16 +91,7 @@ sealed class LaunchError(val title: String, val reason: String, val whatToDo: St
         "На телефоне ~$haveMb МБ, клиент рекомендует от $needMb МБ",
         "Можно продолжить на свой риск — уменьши ОЗУ в настройках игры"
     )
-    object NoEngine : LaunchError(
-        "Нет движка Java-Minecraft",
-        "На телефоне не найден Zalith Launcher, Amethyst, PojavLauncher или Mojo",
-        "Поставь один из них — после этого профиль можно будет передать ему"
-    )
-    object EngineRejected : LaunchError(
-        "Движок не открылся",
-        "Android не смог запустить активность выбранного движка",
-        "Попробуй другой установленный движок или экспортируй инстанс архивом"
-    )
+
     object ClientIncompatible : LaunchError(
         "Клиент помечен «Только ПК»",
         "Манифест прямо говорит, что рантайм этого клиента на телефоне не работает",

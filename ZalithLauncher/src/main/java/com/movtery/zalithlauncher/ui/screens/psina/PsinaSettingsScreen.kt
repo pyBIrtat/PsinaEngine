@@ -85,9 +85,9 @@ fun PsinaSettingsScreen(
                         val trimmed = value.trim()
                         if (trimmed.isNotEmpty()) Prefs.nickname = trimmed
                     },
-                    label = { Text("Ник в игре") },
+                    label = { Text("Ник в игре (оффлайн-аккаунт)") },
                     supportingText = {
-                        Text("Офлайн-профиль: играть можно без аккаунта Microsoft")
+                        Text("Этот ник используется по умолчанию. Microsoft-вход — дополнительно, с экрана «Учётная запись» → «Добавить аккаунт».")
                     },
                     singleLine = true,
                     modifier = Modifier.fillMaxWidth()

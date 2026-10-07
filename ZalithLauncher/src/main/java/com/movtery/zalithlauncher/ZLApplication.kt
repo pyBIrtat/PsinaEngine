@@ -141,6 +141,7 @@ class ZLApplication : Application(), SingletonImageLoader.Factory {
     }
 
     private fun initializeData() {
+        ru.psina.core.PsinaBoot.init(this)
         AccountsManager.initialize(this)
         GamePathManager.initialize(this)
     }

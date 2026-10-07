@@ -67,6 +67,7 @@ class PlayPipeline(private val ctx: Context) {
                 java.io.File(Paths.instanceDir(client.mc), Installer.fileNameOf(client.jar))
             } else null
             var nativeMissing: String? = null
+            var nativeFailure: String? = null
             when (
                 val native = ZalithBackend.nativeLaunch(
                     ctx, client.mc, nickname, ramGb,
@@ -78,26 +79,18 @@ class PlayPipeline(private val ctx: Context) {
                     return
                 }
                 is ZalithBackend.NativeOutcome.VersionMissing -> nativeMissing = native.mc
-                is ZalithBackend.NativeOutcome.Failed ->
-                    Logx.i("нативный запуск не удался (${native.reason}) — пробуем внешние движки")
+                is ZalithBackend.NativeOutcome.Failed -> {
+                    nativeFailure = native.reason
+                    Logx.i("нативный запуск не удался (${native.reason})")
+                }
             }
 
-            // Фолбэк: внешние движки через best-effort интенты.
-            val engines = Engine.installed(ctx)
-            if (engines.isEmpty()) {
-                return fail(
-                    if (nativeMissing != null) LaunchError.EngineVersionMissing(nativeMissing)
-                    else LaunchError.NoEngine
-                )
-            }
-
-            val engine = engines.first()
-            onState(PlayState.LaunchingMinecraft(engine.title))
-            when (val outcome = Engine.requestLaunch(ctx, engine, client.mc, nickname, ramGb, spec.jvmArgs, spec.mainClass)) {
-                is Engine.LaunchOutcome.RequestSent -> onState(PlayState.LaunchRequestSent(engine.title))
-                is Engine.LaunchOutcome.Rejected -> fail(LaunchError.EngineRejected)
-                Engine.LaunchOutcome.NoEngineInstalled -> fail(LaunchError.NoEngine)
-            }
+            // Psina fork: этот APK сам является движком — фолбэка на внешние
+            // лаунчеры больше нет. Честная ошибка вместо установки чужих лаунчеров.
+            return fail(
+                if (nativeMissing != null) LaunchError.EngineVersionMissing(nativeMissing)
+                else LaunchError.NativeLaunchFailed(nativeFailure)
+            )
         } catch (e: Net.DownloadCancelledException) {
             fail(LaunchError.UserCancelled)
         } catch (e: java.io.IOException) {
