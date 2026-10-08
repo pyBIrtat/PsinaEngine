@@ -196,11 +196,9 @@ object Installer {
                 // (папка-обёртка в zip) или совпадение по имени файла.
                 fun wanted(paths: Set<String>): Boolean {
                     if (name in paths) return true
-                    if (paths.any { name.endsWith("/$it") }) return true
-                    if (!it.contains('/')) {
-                        val base = name.substringAfterLast('/')
-                        if (base == it) return true
-                    }
+                    if (paths.any { p -> name.endsWith("/$p") }) return true
+                    // имя файла без пути в манифесте — сравниваем по базовому имени
+                    if (paths.any { p -> !p.contains('/') && name.substringAfterLast('/') == p }) return true
                     return false
                 }
                 val isMod = wanted(wantedMods)
