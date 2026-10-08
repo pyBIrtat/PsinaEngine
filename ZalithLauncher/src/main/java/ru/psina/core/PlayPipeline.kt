@@ -1,7 +1,6 @@
 package ru.psina.core
 
 import android.content.Context
-import com.movtery.zalithlauncher.ui.screens.psina.PsinaAutoInstall
 
 /**
  * Полный пайплайн кнопки «Играть» — один объект, одно состояние за раз:
@@ -64,50 +63,16 @@ class PlayPipeline(private val ctx: Context) {
                 ProfileManager.deleteStale(clientId, client.mc, oldPaths, result.files)
             }
 
-            // fabric-api обязателен ЛЮБОМУ Fabric-клиенту: если он не докачался при
-            // установке (сеть/Modrinth), установка всё равно «прошла» — и Fabric на
-            // устройстве выдал бы «requires any version of fabric-api, which is
-            // missing!» (как у велки на ПК). Самолечение на каждом запуске.
-            if (!ownMain) {
-                val modsDir = Paths.modsDir(client.mc)
-                val hasFa = modsDir.listFiles()
-                    ?.any { it.isFile && it.name.endsWith(".jar", true) && it.name.contains("fabric-api", true) } == true
-                if (!hasFa) {
-                    onState(PlayState.Downloading("Добавляю fabric-api", 0, 0, -1))
-                    Logx.i("в инстансе ${client.mc} нет fabric-api — добавляю")
-                    try {
-                        val url = Modrinth.latestFile("fabric-api", client.mc)
-                            ?: throw IllegalStateException("Modrinth: нет fabric-api для ${client.mc}")
-                        val dst = java.io.File(modsDir, Installer.fileNameOf(url))
-                        Net.download(url, dst, null, cancel)
-                        Logx.i("fabric-api добавлен: ${dst.name}")
-                    } catch (e: Exception) {
-                        Logx.e("не удалось добавить fabric-api — клиент может не запуститься", e)
-                    }
-                }
-            }
+            // Psina fork: НИКАКИХ тихих фоновых действий после установки клиента —
+            // юзер требовал убрать «автозапуск версий»: ни докачки fabric-api на
+            // каждом запуске, ни тихой достройки Fabric-лоадера в базу (она
+            // выглядела как повторное скачивание Minecraft посреди установки).
+            // Не хватает Fabric/базы — честная ошибка; экран «Клиенты» на
+            // следующем нажатии «Играть» ПОПРОСИТ согласие и только потом
+            // достроит (см. PsinaClientsScreen.startPlay).
 
             onState(PlayState.PreparingMobileProfile)
             onState(PlayState.PreparingRuntime)
-
-            // Базы, поставленные старыми версиями лаунчера, ванильные — без Fabric-
-            // лоадера моды из mods/ не грузятся (молча). Достраиваем Fabric один раз.
-            if (!ZalithBackend.baseHasFabric(client.mc)) {
-                onState(PlayState.Downloading(PlayState.FABRIC_UPGRADE_STEP, 0, 0, -1))
-                Logx.i("база psina-${client.mc} без Fabric — достраиваю лоадер")
-                // Прогресс достройки (внутри свой watcher) — в наш диалог состояния.
-                val unsub = PsinaAutoInstall.addProgressListener { pct ->
-                    onState(PlayState.Downloading(PlayState.FABRIC_UPGRADE_STEP, 0, 0, pct.coerceAtLeast(0)))
-                }
-                val ok = try {
-                    PsinaAutoInstall.upgradeBaseWithFabric(ctx, client.mc)
-                } finally {
-                    unsub()
-                }
-                if (!ok) {
-                    Logx.e("достройка Fabric в psina-${client.mc} не удалась — играем как есть")
-                }
-            }
 
             // Родной запуск: этот APK сам является движком (Psina Engine, этап E3).
             onState(PlayState.LaunchingMinecraft("Psina Engine"))
@@ -128,34 +93,11 @@ class PlayPipeline(private val ctx: Context) {
                     return
                 }
                 is ZalithBackend.NativeOutcome.VersionMissing -> {
-                    // База пропала между проверкой и запуском (удалили версию,
-                    // cleanup антивируса и т.п.) — чиним на месте и пробуем ещё
-                    // раз, вместо тупика «нажми Играть ещё раз».
+                    // Базу не нашли. Тихую пере-установку убрали (автозапуск
+                    // версий запрещён) — сообщаем честно: следующее нажатие
+                    // «Играть» предложит установить базу ПО ЯВНОМУ согласию.
                     nativeMissing = native.mc
-                    Logx.i("нативный запуск не нашёл базу ${native.mc} — пробую переустановить")
-                    ZalithBackend.cleanupBrokenVersions(client.mc)
-                    if (PsinaAutoInstall.repairVanillaBase(ctx, client.mc) &&
-                        ZalithBackend.awaitBaseVersionValid(client.mc)
-                    ) {
-                        val retry = ZalithBackend.nativeLaunch(
-                            ctx, client.mc, nickname, ramGb,
-                            spec.jvmArgs, spec.mainClass, clientId, ownMainJar
-                        )
-                        when (retry) {
-                            is ZalithBackend.NativeOutcome.RequestSent -> {
-                                onState(PlayState.LaunchRequestSent("Psina Engine"))
-                                return
-                            }
-                            is ZalithBackend.NativeOutcome.VersionMissing -> {
-                                Logx.e("после пере-установки база ${native.mc} всё ещё отсутствует")
-                            }
-                            is ZalithBackend.NativeOutcome.Failed -> {
-                                nativeMissing = null
-                                nativeFailure = retry.reason
-                                Logx.i("нативный запуск не удался (${retry.reason})")
-                            }
-                        }
-                    }
+                    Logx.i("нативный запуск не нашёл базу ${native.mc} — сообщаю вместо тихой пере-установки")
                 }
                 is ZalithBackend.NativeOutcome.Failed -> {
                     nativeFailure = native.reason

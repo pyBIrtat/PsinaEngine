@@ -99,9 +99,6 @@ fun PsinaClientsScreen(
 
     // Переустановка конкретного клиента (снос пометки Store + обычный пайплайн).
     var reinstallFor by remember { mutableStateOf<ManifestRepo.Client?>(null) }
-    // Чинящий пере-инсталл ванильной базы (лечение полу-установки).
-    var repairFor by remember { mutableStateOf<ManifestRepo.Client?>(null) }
-    var repairError by remember { mutableStateOf<String?>(null) }
     // Тик-счётчик: перечитывать «установлен · N МБ» после установки/сноса.
     var installedTick by remember { mutableIntStateOf(0) }
     // Просмотр хвоста лога прямо из диалога ошибки.
@@ -138,7 +135,7 @@ fun PsinaClientsScreen(
     DisposableEffect(Unit) {
         onDispose {
             pipeline?.cancelDownload()
-            // Уход с экрана посреди авто-установки: не оставляем полу-версию.
+            // Уход с экрана посреди установки: отменяем, чтобы не осталась полу-версия.
             PsinaAutoInstall.cancel()
         }
     }
@@ -201,7 +198,15 @@ fun PsinaClientsScreen(
         autoInstallFor = mc
         val started = PsinaAutoInstall.startVanillaInstall(context, mc, scope) { ok, err ->
             autoInstallFor = null
-            if (ok) runPipeline(client) else autoInstallError = err
+            if (ok) {
+                // Список версий наполняется асинхронно после установки: дождаться
+                // валидной базы, иначе пайплайн не увидит свежепоставленную версию
+                // и честно (но зря) отвалится с «Версия не установлена».
+                scope.launch {
+                    withContext(Dispatchers.IO) { ZalithBackend.awaitBaseVersionValid(mc) }
+                    runPipeline(client)
+                }
+            } else autoInstallError = err
         }
         // Не смогли даже начать (установка уже идёт) — не оставляем
         // вечный диалог прогресса.
@@ -312,7 +317,7 @@ fun PsinaClientsScreen(
                         items(shownClients) { client ->
                             PsinaClientCard(
                                 client = client,
-                                busy = autoInstallFor != null || repairFor != null ||
+                                busy = autoInstallFor != null ||
                                     playState !is PlayState.Idle &&
                                     playState !is PlayState.LaunchFailed &&
                                     playState !is PlayState.LaunchRequestSent,
@@ -343,6 +348,8 @@ fun PsinaClientsScreen(
     }
 
     // Вопрос перед установкой ванильной базы: никаких фоновых автозапусков.
+    // Согласился — установим базу И клиента одним потоком до конца (это одна
+    // подтверждённая операция, а не тихий автозапуск); «Отмена» ничего не качает.
     installBaseFor?.let { client ->
         val mc = client.mc
         AlertDialog(
@@ -350,15 +357,16 @@ fun PsinaClientsScreen(
             title = { Text("Minecraft $mc не установлен") },
             text = {
                 Text(
-                    "Для запуска нужна база Minecraft $mc (с Fabric-лоадером). " +
-                        "Скачивание — сотни мегабайт, занимает несколько минут. Установить сейчас?"
+                    "Для запуска «${client.name}» сначала ставится база Minecraft $mc " +
+                        "(с Fabric-лоадеров), затем сам клиент. Скачивание — сотни мегабайт, " +
+                        "несколько минут. Качать и ставить? После установки игра запустится сразу."
                 )
             },
             confirmButton = {
                 TextButton(onClick = {
                     installBaseFor = null
                     startBaseInstall(mc, client)
-                }) { Text("Установить") }
+                }) { Text("Установить и играть") }
             },
             dismissButton = {
                 TextButton(onClick = { installBaseFor = null }) { Text("Отмена") }
@@ -412,63 +420,6 @@ fun PsinaClientsScreen(
         )
     }
 
-    // Лечение полу-установки: клиент помечен установленным, но ванильная база
-    // битая/отсутствует. Чиним базу, затем обычный пайплайн докачивает клиента.
-    LaunchedEffect(repairFor) {
-        val client = repairFor ?: return@LaunchedEffect
-        val ok = withContext(Dispatchers.IO) {
-            PsinaAutoInstall.repairVanillaBase(context, client.mc)
-        }
-        repairFor = null
-        if (ok) runPipeline(client) else repairError = "Базу Minecraft ${client.mc} не удалось восстановить"
-    }
-
-    repairFor?.let { client ->
-        val progress = remember { mutableIntStateOf(PsinaAutoInstall.progressPercent) }
-        DisposableEffect(Unit) {
-            val unsub = PsinaAutoInstall.addProgressListener { progress.intValue = it }
-            onDispose { unsub() }
-        }
-        AlertDialog(
-            onDismissRequest = {},
-            title = { Text("Восстанавливаю Minecraft ${client.mc}") },
-            text = {
-                Column {
-                    Text(
-                        "Клиент «${client.name}» остался недоустановленным (файлы скачались, " +
-                            "а база Minecraft — нет). Сейчас починю базу и продолжу установку."
-                    )
-                    Spacer(Modifier.height(8.dp))
-                    if (progress.intValue >= 0) {
-                        LinearProgressIndicator(
-                            progress = { progress.intValue / 100f },
-                            modifier = Modifier.fillMaxWidth()
-                        )
-                        Spacer(Modifier.height(4.dp))
-                        Text("${progress.intValue}%")
-                    } else {
-                        LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-                    }
-                }
-            },
-            confirmButton = {}
-        )
-    }
-
-    repairError?.let { err ->
-        AlertDialog(
-            onDismissRequest = { repairError = null },
-            title = { Text("Не удалось восстановить") },
-            text = { Text(err) },
-            confirmButton = {
-                TextButton(onClick = { repairError = null }) { Text("Понятно") }
-            },
-            dismissButton = {
-                TextButton(onClick = { logText = Logx.tail(200) }) { Text("Показать лог") }
-            }
-        )
-    }
-
     // Подтверждение переустановки: сносим пометку «установлен» и качаем заново.
     reinstallFor?.let { client ->
         AlertDialog(
@@ -477,7 +428,7 @@ fun PsinaClientsScreen(
             text = {
                 Text(
                     "Файлы клиента будут скачаны заново (до 300 МБ). Если проблема была " +
-                        "в битой установке — это её починит. База Minecraft $client.mc останется."
+                        "в битой установке — это её починит. База Minecraft ${client.mc} останется."
                 )
             },
             confirmButton = {

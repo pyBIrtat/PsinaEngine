@@ -5,22 +5,19 @@ import com.movtery.zalithlauncher.game.addons.modloader.fabriclike.fabric.Fabric
 import com.movtery.zalithlauncher.game.download.game.GameDownloadInfo
 import com.movtery.zalithlauncher.game.download.game.GameInstaller
 import com.movtery.zalithlauncher.game.version.installed.VersionsManager
-import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import ru.psina.core.Logx
 
 /**
- * Мост «играть в один тап»: если у форка ещё нет валидной версии psina-<mc>,
- * ставим ванильную базу <mc> штатным GameInstaller форка
- * (customVersionName = psina-<mc>) — после чего экран сам перезапускает
- * pipeline и клиент доустанавливается поверх готовой базы.
+ * Установка ванильной базы psina-<mc> штатным GameInstaller форка
+ * (customVersionName = psina-<mc>). Вызывается ТОЛЬКО после явного согласия
+ * юзера (диалог на экране «Клиенты»): никаких фоновых автозапусков версий.
  *
- * Также умеет ЛЕЧИТЬ полу-установку: если папка psina-<mc> осталась от
- * сорванной установки (клиент удалён посреди установки и т.п.), её надо
- * снести — иначе GameInstaller считает базу «уже установленной» и
- * валидную версию так и не собирает.
+ * Если папка psina-<mc> осталась от сорванной установки (клиент удалён
+ * посреди установки и т.п.), её надо снести — иначе GameInstaller считает
+ * базу «уже установленной» и валидную версию так и не собирает. Экран
+ * делает это в startBaseInstall перед вызовом (cleanupBrokenVersions).
  */
 object PsinaAutoInstall {
     const val TAG = "PsinaAutoInstall"
@@ -42,11 +39,6 @@ object PsinaAutoInstall {
     /** Отмена ДО старта (пока список Fabric ещё грузится). */
     @Volatile
     private var startCancelled: Boolean = false
-
-    /** Играется ли сейчас чинящий пере-инсталл (для UI поверх пайплайна). */
-    @Volatile
-    var repairing: Boolean = false
-        private set
 
     private val progressWatchers =
         mutableListOf<(Int) -> Unit>()
@@ -96,7 +88,7 @@ object PsinaAutoInstall {
             if (startCancelled) {
                 Logx.i("установка $name отменена до старта")
                 pendingStart = false
-                // Обязательно сообщаем результат: ждущий repairVanillaBase
+                // Обязательно сообщаем результат: ждущий startVanillaInstall-caller
                 // иначе зависнет навсегда на deferred.await().
                 onResult(false, "Установка отменена")
                 return@launch
@@ -136,128 +128,10 @@ object PsinaAutoInstall {
         return true
     }
 
-    /**
-     * ЛЕЧИМ полу-установку: сносим битую папку psina-<mc> (и её производные
-     * psina-<mc>-<clientId>), затем БЛОКИРУЮЩЕ ставим ванильную базу заново.
-     * Вызывается из фонового потока пайплайна. Прогресс — в progressPercent
-     * и через addProgressListener (диалог поверх пайплайна).
-     *
-     * @return true — база валидна и можно запускать клиента заново.
-     */
-    fun repairVanillaBase(context: Context, mc: String): Boolean = try {
-        repairing = true
-        reportProgress(-1)
-        val deferred = CompletableDeferred<Boolean>()
-        // repair() зовут из worker-потока, а installGame выполняет задачи
-        // в переданном scope — берём независимый IO-scope и ждём результат.
-        val installScope = CoroutineScope(Dispatchers.IO)
-        val started = startVanillaInstall(context, mc, installScope) { ok, err ->
-            if (!ok) Logx.e("пере-установка ванили $mc не удалась: $err")
-            deferred.complete(ok)
-        }
-        if (!started) {
-            Logx.e("пере-установка ванили $mc не началась (уже идёт?)")
-            false
-        } else {
-            // Вызов из worker-потока (пайплайн/IO), блокировка допустима.
-            kotlinx.coroutines.runBlocking {
-                // Следим за задачами установщика: средний прогресс по запущенным.
-                val watcher = installScope.launch {
-                    while (deferred.isActive) {
-                        val inst = activeInstaller
-                        val running = inst?.tasksFlow?.value
-                            ?.filter { it.task.stage.value == com.movtery.zalithlauncher.coroutine.TaskStage.RUNNING }
-                        if (running.isNullOrEmpty()) reportProgress(-1)
-                        else reportProgress(
-                            (running.maxOf { it.task.progress.value }.coerceAtLeast(0f) * 100).toInt()
-                        )
-                        kotlinx.coroutines.delay(200)
-                    }
-                }
-                val ok = deferred.await()
-                watcher.cancel()
-                ok
-            }
-        }
-    } finally {
-        repairing = false
-        reportProgress(-1)
-    }
-
     /** Отмена установки (кнопка в диалоге). */
     fun cancel() {
         startCancelled = true
         activeInstaller?.cancelInstall()
         activeInstaller = null
-    }
-
-    /**
-     * Достроить Fabric-лоадер в УЖЕ установленную ванильную базу psina-<mc>
-     * (версии выпущены до того, как база стала ставиться с Fabric).
-     * Штатный modifyVersion: ваниль перекачивается во временные папки,
-     * json пересобирается с net.fabricmc:fabric-loader в libraries, затем
-     * заменяются ТОЛЬКО json/jar версии — mods/ и сохранения не трогаются.
-     * Блокирующе: вызывать из фонового потока.
-     * @return true — в базе теперь есть Fabric-лоадер (или он уже был).
-     */
-    fun upgradeBaseWithFabric(context: Context, mc: String): Boolean = try {
-        val name = "psina-$mc"
-        Logx.i("достраиваю Fabric-лоадер в базу $name")
-        repairing = true
-        reportProgress(-1)
-        val deferred = CompletableDeferred<Boolean>()
-        // Вызов из рабочего потока пайплайна — здесь блокировка допустима.
-        val fabric = kotlinx.coroutines.runBlocking {
-            runCatching { FabricVersions.fabricFor(mc) }
-                .onFailure { Logx.e("список Fabric не получен — пропуск достройки", it) }
-                .getOrNull()
-        }
-        if (fabric == null) {
-            repairing = false
-            reportProgress(-1)
-            return false
-        }
-        val installer = GameInstaller(
-            context = context,
-            info = GameDownloadInfo(
-                gameVersion = mc,
-                customVersionName = name,
-                fabric = fabric
-            ),
-            scope = CoroutineScope(Dispatchers.IO)
-        )
-        installer.modifyVersion(
-            onModified = {
-                Logx.i("Fabric-лоадер добавлен в $name")
-                VersionsManager.refresh("[$TAG]", name)
-                deferred.complete(true)
-            },
-            onError = { th ->
-                Logx.e("достройка Fabric не удалась: $name", th)
-                deferred.complete(false)
-            }
-        )
-        kotlinx.coroutines.runBlocking {
-            val watcher = CoroutineScope(Dispatchers.IO).launch {
-                while (deferred.isActive) {
-                    val running = installer.tasksFlow.value
-                        .filter { it.task.stage.value == com.movtery.zalithlauncher.coroutine.TaskStage.RUNNING }
-                    if (running.isNullOrEmpty()) reportProgress(-1)
-                    else reportProgress(
-                        (running.maxOf { it.task.progress.value }.coerceAtLeast(0f) * 100).toInt()
-                    )
-                    kotlinx.coroutines.delay(200)
-                }
-            }
-            val ok = deferred.await()
-            watcher.cancel()
-            ok
-        }
-    } catch (e: Exception) {
-        Logx.e("достройка Fabric в $mc упала", e)
-        false
-    } finally {
-        repairing = false
-        reportProgress(-1)
     }
 }

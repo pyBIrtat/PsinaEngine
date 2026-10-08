@@ -10,7 +10,7 @@ package ru.psina.core
  */
 sealed class PlayState {
     companion object {
-        /** Текст шага «достраиваем Fabric-лоадер в базу» — по нему UI прячет кнопку «Отменить» (отменять нечего). */
+        /** Текст шага достройки Fabric (используется только с явного согласия юзера). */
         const val FABRIC_UPGRADE_STEP: String = "Добавляю Fabric-лоадер"
     }
 
@@ -60,7 +60,7 @@ sealed class LaunchError(val title: String, val reason: String, val whatToDo: St
     data class EngineVersionMissing(val mc: String) : LaunchError(
         "Версия не установлена",
         "В Psina Engine нет целой версии для Minecraft $mc (база не установилась или повреждена)",
-        "Проверь интернет и нажми «Играть» — база доустановится автоматически. " +
+        "Нажми «Играть» ещё раз: лаунчер спросит и ПО ТВОЕМУ согласию поставит базу. " +
             "Если не помогает — «Переустановить клиента» на его карточке"
     )
     data class NativeLaunchFailed(val nativeReason: String?) : LaunchError(
