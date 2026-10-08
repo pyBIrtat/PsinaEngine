@@ -44,7 +44,29 @@ object Installer {
 
         // 1) основной клиент
         if (spec.status == Support.EXPERIMENTAL && client.isPortable) {
-            total += installFromPortableZip(client, spec, mods, installed, onProgress)
+            // Клиент со своим mainClass — НЕ мод: кладём в корень инстанса,
+            // он станет version-jar производной версии (см. ZalithBackend).
+            // Портативке он нужен даже тогда, когда из её zip мы ничего
+            // не берём (как у Нурсултана: клиентский jar отдаётся отдельной
+            // ссылкой, а весь остальной пакет — Windows-рантайм).
+            if (AndroidCompat.needsOwnMain(spec) && client.jar.isNotBlank()) {
+                val dst = File(Paths.instanceDir(client.mc), fileNameOf(client.jar))
+                onProgress(Progress("Скачиваем ${client.name}", 5))
+                Net.download(client.jar, dst, client.sha256) { done, len ->
+                    val pct = if (len > 0) (done * 60 / len).toInt() else 0
+                    onProgress(Progress("Скачиваем ${client.name}", 5 + pct, "${done / 1048576} МБ"))
+                }
+                stripIfNeeded(spec, dst)
+                installed.add(dst); total += dst.length()
+            }
+            // Из zip портативки берём только перечисленное в манифесте.
+            // Нечего брать (моды отдаются прямыми ссылками / это ownMain) —
+            // НЕ качаем сотни мегабайт зря.
+            if (spec.modsFromZip.isNotEmpty() || spec.libsFromZip.isNotEmpty()) {
+                total += installFromPortableZip(client, spec, mods, installed, onProgress)
+            } else {
+                Logx.i("портативка ${client.id}: из zip ничего не нужно — пропускаю скачивание пакета")
+            }
         } else {
             if (client.jar.isBlank()) throw IllegalStateException("в манифесте нет ссылки на jar для ${client.id}")
             onProgress(Progress("Скачиваем ${client.name}", 5))
@@ -138,10 +160,23 @@ object Installer {
         val zip = File(Paths.downloads, "${client.id}.zip")
 
         onProgress(Progress("Скачиваем пакет ${client.name}", 8, "нужен один раз"))
-        Net.download(zipUrl, zip, null) { done, len ->
-            val pct = if (len > 0) (done * 50 / len).toInt() else 0
-            onProgress(Progress("Скачиваем пакет ${client.name}", 8 + pct, "${done / 1048576} МБ"))
+        // GitHub-релизы на мобильном интернете обрываются: докачка (.part + Range)
+        // уже есть в Net, добавляем до 3 попыток — хвост продолжится с места обрыва.
+        var lastErr: Exception? = null
+        for (attempt in 1..3) {
+            try {
+                Net.download(zipUrl, zip, null) { done, len ->
+                    val pct = if (len > 0) (done * 50 / len).toInt() else 0
+                    onProgress(Progress("Скачиваем пакет ${client.name}", 8 + pct, "${done / 1048576} МБ"))
+                }
+                lastErr = null
+                break
+            } catch (e: Exception) {
+                lastErr = e
+                Logx.e("скачивание пакета ${client.id}: попытка $attempt не удалась", e)
+            }
         }
+        lastErr?.let { throw it }
 
         val wantedMods = spec.modsFromZip.map { it.replace('\\', '/') }.toSet()
         val wantedLibs = spec.libsFromZip.map { it.replace('\\', '/') }.toSet()
@@ -157,8 +192,19 @@ object Installer {
                 val e = entries.nextElement()
                 if (e.isDirectory) continue
                 val name = e.name.replace('\\', '/')
-                val isMod = name in wantedMods
-                val isLib = name in wantedLibs
+                // Точное совпадение пути из манифеста; фолбэк — суффикс «/путь»
+                // (папка-обёртка в zip) или совпадение по имени файла.
+                fun wanted(paths: Set<String>): Boolean {
+                    if (name in paths) return true
+                    if (paths.any { name.endsWith("/$it") }) return true
+                    if (!it.contains('/')) {
+                        val base = name.substringAfterLast('/')
+                        if (base == it) return true
+                    }
+                    return false
+                }
+                val isMod = wanted(wantedMods)
+                val isLib = wanted(wantedLibs)
                 if (!isMod && !isLib) continue
                 if (excluded.any { name.contains(it) }) {
                     Logx.i("пропуск на телефоне: $name")
@@ -175,9 +221,13 @@ object Installer {
                 onProgress(Progress("Распаковываем моды", 60 + done * 5, dst.name))
             }
         }
-        if (done == 0) {
+        if (done == 0 && wantedMods.isNotEmpty()) {
             throw IllegalStateException(
-                "в пакете ${client.id} не нашлось файлов из modsFromZip — проверь блок android в манифесте"
+                "в пакете ${client.id} не нашлось файлов из modsFromZip — проверь блок android в манифесте. " +
+                    "Искали: ${wantedMods.joinToString(", ")}. " +
+                    "В пакете есть: " + ZipFile(zip).use { z ->
+                        z.entries().asSequence().map { it.name }.take(15).toList().joinToString(", ")
+                    }
             )
         }
         Logx.i("портативка ${client.id}: распаковано $done файлов")

@@ -107,6 +107,10 @@ fun PsinaClientsScreen(
     // Просмотр хвоста лога прямо из диалога ошибки.
     var logText by remember { mutableStateOf<String?>(null) }
 
+    // Установка ванильной базы — ТОЛЬКО по явному согласию (п.1 запроса:
+    // никакого автозапуска версий в фоне без спроса).
+    var installBaseFor by remember { mutableStateOf<ManifestRepo.Client?>(null) }
+
     // Авто-установка ванильной базы для «игры в один тап» на чистом телефоне.
     val scope = rememberCoroutineScope()
     var autoInstallFor by remember { mutableStateOf<String?>(null) }
@@ -181,21 +185,27 @@ fun PsinaClientsScreen(
         // База должна быть ЦЕЛОЙ (json+jar): битая полу-установка не считается —
         // иначе запуск навсегда падает, а переустановка не начинается.
         if (!ZalithBackend.isBaseVersionValid(mc) && autoInstallFor == null) {
-            // Недоделанную psina-базу сносим: иначе установщик ответит
-            // «уже установлено» и полу-версия останется навсегда.
-            if (ZalithBackend.hasBrokenBaseVersion(mc)) ZalithBackend.cleanupBrokenVersions(mc)
-            autoInstallProgress = -1
-            autoInstallFor = mc
-            val started = PsinaAutoInstall.startVanillaInstall(context, mc, scope) { ok, err ->
-                autoInstallFor = null
-                if (ok) runPipeline(client) else autoInstallError = err
-            }
-            // Не смогли даже начать (установка уже идёт) — не оставляем
-            // вечный диалог прогресса.
-            if (!started) autoInstallFor = null
+            // НИКАКОЙ автоматической установки: спрашиваем и ждём ответа
+            // (см. диалог installBaseFor ниже). Недоделанную psina-базу
+            // снесём при согласии: иначе установщик ответит «уже установлено».
+            installBaseFor = client
         } else {
             runPipeline(client)
         }
+    }
+
+    // Согласие на установку базы получено — качаем и после установки запускаем.
+    fun startBaseInstall(mc: String, client: ManifestRepo.Client) {
+        if (ZalithBackend.hasBrokenBaseVersion(mc)) ZalithBackend.cleanupBrokenVersions(mc)
+        autoInstallProgress = -1
+        autoInstallFor = mc
+        val started = PsinaAutoInstall.startVanillaInstall(context, mc, scope) { ok, err ->
+            autoInstallFor = null
+            if (ok) runPipeline(client) else autoInstallError = err
+        }
+        // Не смогли даже начать (установка уже идёт) — не оставляем
+        // вечный диалог прогресса.
+        if (!started) autoInstallFor = null
     }
 
     // Поиск + сортировка: сначала готовые к запуску, затем экспериментальные,
@@ -330,6 +340,30 @@ fun PsinaClientsScreen(
                 delay(200)
             }
         }
+    }
+
+    // Вопрос перед установкой ванильной базы: никаких фоновых автозапусков.
+    installBaseFor?.let { client ->
+        val mc = client.mc
+        AlertDialog(
+            onDismissRequest = { installBaseFor = null },
+            title = { Text("Minecraft $mc не установлен") },
+            text = {
+                Text(
+                    "Для запуска нужна база Minecraft $mc (с Fabric-лоадером). " +
+                        "Скачивание — сотни мегабайт, занимает несколько минут. Установить сейчас?"
+                )
+            },
+            confirmButton = {
+                TextButton(onClick = {
+                    installBaseFor = null
+                    startBaseInstall(mc, client)
+                }) { Text("Установить") }
+            },
+            dismissButton = {
+                TextButton(onClick = { installBaseFor = null }) { Text("Отмена") }
+            }
+        )
     }
 
     autoInstallFor?.let { mc ->
