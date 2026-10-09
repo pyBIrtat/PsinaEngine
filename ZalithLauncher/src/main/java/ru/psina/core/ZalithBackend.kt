@@ -139,16 +139,23 @@ object ZalithBackend {
     }
 
     /**
-     * Синхронизирует моды psina-инстанса в mods-папку версии.
-     * Источник — Paths.modsDir(mc) (туда всё поставил Installer), приёмник —
-     * VersionFolders.MOD.getDir(version.getGameDir()). Копируем только jar'ы,
-     * перезаписывая при несовпадении размера/времени.
+     * Синхронизирует моды psina-инстанса в mods-папку версии — ТОЛЬКО моды
+     * выбранного клиента. Раньше сюда сваливались jar'ы всех клиентов одной
+     * версии mc (общий Paths.modsDir(mc), куда Installer кладёт всех) — и
+     * клиент запускался сразу с несколькими точками входа: два-три клиента в
+     * mods/ одновременно = конфликт классов и падение JVM (fatal signal 6,
+     * «код 6 у Rockstar»).
      *
-     * Чистка устаревших модов — ТОЛЬКО свои: в корне mods-папки версии лежит
-     * маркер .psina-sync.json со списком модов, которые мы туда когда-либо
-     * копировали. Удаляем только jar'ы из маркера, которых больше нет в
-     * инстансе. Пользовательские моды, добавленные вручную/через менеджер
-     * модов, никогда не трогаем.
+     * Источник — файлы конкретного клиента: ProfileManager хранит ledger
+     * .psina-profile-<clientId>.json со списком путей, которые Installer
+     * записал при установке. Если ledger пуст/битый (старая установка до
+     * изоляции) — фолбэк: берём ВСЕ jar'ы инстанса (прежнее поведение),
+     * иначе свежая установка ничего бы не запустила.
+     *
+     * Приёмник — VersionFolders.MOD.getDir(version.getGameDir()). Чистка —
+     * только свои (маркер .psina-sync.json): удаляем jar'ы из маркера,
+     * которых больше нет в наборе этого клиента. Пользовательские моды,
+     * добавленные вручную/через менеджер модов, никогда не трогаем.
      */
     fun syncMods(mc: String, version: Version, clientId: String = ""): Int {
         val src = Paths.modsDir(mc)
@@ -158,10 +165,33 @@ object ZalithBackend {
         val markerFile = File(dst, SYNC_MARKER)
         val prevSynced = readSyncMarker(markerFile)
 
+        // Набор jar'ов ЭТОГО клиента (ledger из профиля установки).
+        val ownJars = ProfileManager.installedPaths(clientId, mc)
+            .filter { it.endsWith(".jar", true) }
+            .map { it.substringAfterLast('/').substringAfterLast('\\') }
+            .toSet()
+        // Jars ДРУГИХ установленных клиентов этого mc — их НЕ грузим.
+        val foreignJars = Store.foreignClientJars(clientId, mc).toSet()
+        // Fallback: ledger пуст (установка до изоляции/ручная). Берём всё —
+        // как раньше, лишь бы клиент запускался.
+        val useLedger = clientId.isNotBlank() && ownJars.isNotEmpty()
+
         var n = 0
         val copiedNow = mutableSetOf<String>()
         src.walkTopDown()
             .filter { it.isFile && it.name.endsWith(".jar", true) }
+            .filter { f ->
+                if (!useLedger) return@filter true
+                val name = f.name
+                // Файлы нашего клиента — всегда; инфраструктура (fabric-api
+                // и т.п., не принадлежащая другому клиенту) — тоже.
+                if (name in ownJars) return@filter true
+                if (foreignJars.contains(name)) {
+                    // ЧУЖОЙ клиентский jar: НЕ грузим. Это и был signal 6.
+                    return@filter false
+                }
+                true
+            }
             .forEach { f ->
                 val out = File(dst, f.name)
                 if (!out.exists() || out.length() != f.length() || out.lastModified() < f.lastModified()) {
@@ -172,17 +202,18 @@ object ZalithBackend {
             }
 
         // Устаревшие СВОИ моды: скопированы нами раньше (в маркере), но в
-        // инстансе их уже нет — например, после переустановки на новую сборку.
+        // набор этого клиента больше не входят — например, после
+        // переустановки на другую сборку или из-за изоляции клиентов.
         (prevSynced - copiedNow).forEach { name ->
             val f = File(dst, name)
             if (f.isFile) {
                 f.delete()
-                Logx.i("syncMods: удалён устаревший мод $name")
+                Logx.i("syncMods: удалён мод $name (не относится к клиенту $clientId)")
             }
         }
         if (prevSynced != copiedNow) writeSyncMarker(markerFile, copiedNow)
 
-        Logx.i("syncMods: $n jar'ов из ${src.path} -> ${dst.path}")
+        Logx.i("syncMods: $n jar'ов из ${src.path} -> ${dst.path} (клиент=$clientId, изоляция=$useLedger)")
         return n
     }
 

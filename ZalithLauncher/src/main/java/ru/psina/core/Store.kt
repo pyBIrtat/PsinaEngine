@@ -69,7 +69,9 @@ object Store {
         val bytes: Long,
         val at: Long,
         /** Уровень поддержки, с которым клиент ставился (чтобы UI не гадал). */
-        val status: String = ""
+        val status: String = "",
+        /** Клиентские jar'ы (моды этого клиента) — для изоляции при запуске. */
+        val jarNames: List<String> = emptyList()
     )
 
     private val installedFile get() = File(Paths.root, "installed.json")
@@ -85,7 +87,12 @@ object Store {
                 out[id] = Installed(
                     id, o.optString("mc"), o.optString("jar").ifBlank { null },
                     o.optInt("files"), o.optLong("bytes"), o.optLong("at"),
-                    o.optString("status")
+                    o.optString("status"),
+                    o.optJSONArray("jarNames")?.let { arr ->
+                        (0 until arr.length()).mapNotNull { idx ->
+                            arr.optString(idx).takeIf { s -> s.isNotBlank() }
+                        }
+                    } ?: emptyList()
                 )
             }
         } catch (e: Exception) {
@@ -101,6 +108,7 @@ object Store {
                 put("id", v.id); put("mc", v.mc); put("jar", v.jar ?: "")
                 put("files", v.files); put("bytes", v.bytes); put("at", v.at)
                 put("status", v.status)
+                put("jarNames", JSONArray().apply { v.jarNames.forEach { put(it) } })
             })
         }
         installedFile.writeText(arr.toString())
@@ -110,11 +118,36 @@ object Store {
 
     fun installedInfo(id: String): Installed? = readInstalled()[id]
 
-    fun markInstalled(id: String, mc: String, jar: String?, status: Support = Support.READY) {
+    /**
+     * Имена jar'ов, принадлежащих ДРУГИМ клиентам той же версии mc.
+     * Используется изоляцией модов при запуске (ZalithBackend.syncMods):
+     * чужие клиентские jar'ы не должны попадать в mods-папку версии —
+     * несколько клиентов сразу = конфликт точек входа и падение JVM
+     * (fatal signal 6 у Rockstar).
+     */
+    fun foreignClientJars(excludeClientId: String, mc: String): List<String> {
+        val jars = mutableListOf<String>()
+        readInstalled().values.forEach { v ->
+            if (v.id == excludeClientId || v.mc != mc) return@forEach
+            jars.addAll(v.jarNames)
+            v.jar?.takeIf { it.isNotBlank() }?.let { jars.add(it) }
+        }
+        return jars.distinct()
+    }
+
+    fun markInstalled(id: String, mc: String, jar: String?, status: Support = Support.READY, jarNames: List<String> = emptyList()) {
         val map = readInstalled()
         val dir = Paths.instanceDir(mc)
         val count = dir.walkTopDown().count { it.isFile }
-        map[id] = Installed(id, mc, jar, count, Paths.sizeOf(dir), System.currentTimeMillis(), status.name)
+        map[id] = Installed(
+            id, mc, jar,
+            count, Paths.sizeOf(dir), System.currentTimeMillis(),
+            status.name,
+            // Полный список клиентских jar'ов — изоляция модов при запуске
+            // берёт отсюда, чтобы не грузить чужие клиенты (signal 6).
+            // Заполняется и из jar (на случай установки до этого поля).
+            jarNames.ifEmpty { jar?.let { listOf(it) } ?: emptyList() }
+        )
         writeInstalled(map)
     }
 

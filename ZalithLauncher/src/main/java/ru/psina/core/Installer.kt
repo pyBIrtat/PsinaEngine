@@ -139,7 +139,10 @@ object Installer {
         Store.markInstalled(
             client.id, client.mc,
             if (client.isPortable) null else installed.firstOrNull()?.name,
-            spec.status
+            spec.status,
+            // Все jar'ы этого клиента (в т.ч. моды) — по ним изоляция при
+            // запуске отличает «свои» моды от чужих клиентов (signal 6).
+            installed.filter { it.isFile && it.name.endsWith(".jar", true) }.map { it.name }
         )
         return Result(client.id, client.mc, installed, total)
     }
